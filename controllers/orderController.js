@@ -171,11 +171,42 @@ exports.updateOrder = async (req, res, next) => {
 // DELETE /api/orders/:id
 exports.deleteOrder = async (req, res, next) => {
   try {
+    const { restoreStock } = req.query;
     const order = await Order.findByIdAndDelete(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
-    res.status(200).json({ success: true, message: 'Đã xóa đơn hàng' });
+
+    // Hoàn lại số lượng nguyên liệu nếu có yêu cầu
+    if (restoreStock === 'true') {
+      try {
+        const refunds = await buildMaterialDeductions(order.items);
+        const updatePromises = [];
+        for (const [materialId, refundQty] of refunds.entries()) {
+          updatePromises.push(
+            (async () => {
+              const mat = await Material.findById(materialId);
+              if (!mat) return;
+
+              const newStock = mat.stock + refundQty;
+              const newActual = mat.actualStock + refundQty;
+              const newStatus = calcStatus(newActual, mat.minStock);
+
+              await Material.findByIdAndUpdate(materialId, {
+                stock: newStock,
+                actualStock: newActual,
+                status: newStatus,
+              });
+            })()
+          );
+        }
+        await Promise.all(updatePromises);
+      } catch (refundErr) {
+        console.error('[deleteOrder] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
+      }
+    }
+
+    res.status(200).json({ success: true, message: 'Đã xóa đơn hàng' + (restoreStock === 'true' ? ' và hoàn lại nguyên liệu' : '') });
   } catch (error) {
     next(error);
   }

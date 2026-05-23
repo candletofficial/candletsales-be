@@ -1,4 +1,5 @@
 const Material = require('../models/Material');
+const Product = require('../models/Product');
 
 // Lấy danh sách nguyên vật liệu
 exports.getMaterials = async (req, res, next) => {
@@ -69,11 +70,10 @@ exports.updateMaterial = async (req, res, next) => {
         return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
       }
       
-      // Nếu frontend gửi lên một stock mới, ta tính delta để cộng tương ứng vào actualStock
+      // Nếu frontend gửi lên một stock mới, cập nhật actualStock bằng đúng với stock đó
       let updatedActualStock = currentMaterial.actualStock;
       if (payload.stock !== undefined && payload.stock !== currentMaterial.stock) {
-        const stockDelta = payload.stock - currentMaterial.stock;
-        updatedActualStock = currentMaterial.actualStock + stockDelta;
+        updatedActualStock = payload.stock;
         // Ghi đè lại vào payload để lưu xuống DB
         payload.actualStock = updatedActualStock;
       } else if (payload.actualStock !== undefined) {
@@ -99,7 +99,24 @@ exports.updateMaterial = async (req, res, next) => {
 // Xóa nguyên vật liệu
 exports.deleteMaterial = async (req, res, next) => {
   try {
-    const material = await Material.findByIdAndDelete(req.params.id);
+    const materialId = req.params.id;
+
+    // Kiểm tra xem nguyên liệu có đang được sử dụng trong công thức sản phẩm nào không
+    const usedInProductsCount = await Product.countDocuments({
+      $or: [
+        { 'base_ingredients.ingredient_id': materialId },
+        { 'skus.extra_ingredients.ingredient_id': materialId }
+      ]
+    });
+
+    if (usedInProductsCount > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Không thể xoá nguyên vật liệu đang được cấu hình trong công thức của sản phẩm.' 
+      });
+    }
+
+    const material = await Material.findByIdAndDelete(materialId);
     if (!material) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
     }
