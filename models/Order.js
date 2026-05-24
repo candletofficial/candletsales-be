@@ -26,6 +26,11 @@ const orderSchema = new mongoose.Schema({
   },
   total_price: { type: Number, required: true, min: 0 }, // admin có thể chỉnh tay
   logistics_cost: { type: Number, default: 0 },
+  source: { 
+    type: String, 
+    enum: ['shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'], 
+    default: 'khác' 
+  },
   note: { type: String, default: '' },
   ordered_at: { type: Date, default: Date.now },
 }, { timestamps: true });

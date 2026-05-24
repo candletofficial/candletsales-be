@@ -61,6 +61,7 @@ exports.updateProduct = async (req, res, next) => {
     if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
     res.status(200).json({ success: true, data: product });
   } catch (error) {
+    require('fs').writeFileSync('update-error.log', String(error.message) + '\n' + String(error.stack));
     next(error);
   }
 };

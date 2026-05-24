@@ -25,8 +25,8 @@ exports.getAdCosts = async (req, res, next) => {
 // POST /api/ad-costs
 exports.createAdCost = async (req, res, next) => {
   try {
-    const { date, platform, amount, note } = req.body;
-    const record = await AdCost.create({ date, platform, amount, note: note || '' });
+    const { date, platform, base_amount, vat, amount, note } = req.body;
+    const record = await AdCost.create({ date, platform, base_amount, vat, amount, note: note || '' });
     res.status(201).json({ success: true, data: record, message: 'Đã thêm chi phí quảng cáo' });
   } catch (error) {
     next(error);
@@ -36,10 +36,10 @@ exports.createAdCost = async (req, res, next) => {
 // PUT /api/ad-costs/:id
 exports.updateAdCost = async (req, res, next) => {
   try {
-    const { date, platform, amount, note } = req.body;
+    const { date, platform, base_amount, vat, amount, note } = req.body;
     const record = await AdCost.findByIdAndUpdate(
       req.params.id,
-      { date, platform, amount, note },
+      { date, platform, base_amount, vat, amount, note },
       { new: true, runValidators: true }
     );
     if (!record) {

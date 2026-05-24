@@ -83,7 +83,7 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, note, ordered_at } = req.body;
+    const { items, total_price, logistics_cost, source, note, ordered_at } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -110,6 +110,7 @@ exports.createOrder = async (req, res, next) => {
       items,
       total_price,
       logistics_cost: logistics_cost || 0,
+      source: source || 'khác',
       note: note || '',
       ordered_at: ordered_at || new Date(),
     });
@@ -150,17 +151,81 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, note, ordered_at } = req.body;
+    const { items, total_price, logistics_cost, source, note, ordered_at } = req.body;
 
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { items, total_price, logistics_cost, note, ordered_at },
-      { new: true, runValidators: true }
-    );
+    if (!items || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
+    }
 
-    if (!order) {
+    const oldOrder = await Order.findById(req.params.id);
+    if (!oldOrder) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
+
+    // 1. Tính toán lượng nguyên liệu cũ và mới
+    const oldDeductions = await buildMaterialDeductions(oldOrder.items);
+    const newDeductions = await buildMaterialDeductions(items);
+
+    // 2. Tính sự chênh lệch (diff = new - old)
+    // Nếu diff > 0 nghĩa là cần trừ thêm nguyên liệu. Nếu diff < 0 nghĩa là hoàn trả lại nguyên liệu.
+    const diffDeductions = new Map();
+
+    for (const [materialId, newQty] of newDeductions.entries()) {
+      diffDeductions.set(materialId, newQty);
+    }
+
+    for (const [materialId, oldQty] of oldDeductions.entries()) {
+      const currentDiff = diffDeductions.get(materialId) || 0;
+      diffDeductions.set(materialId, currentDiff - oldQty);
+    }
+
+    // 3. Kiểm tra xem có đủ nguyên liệu để thêm (diff > 0) hay không
+    for (const [materialId, diffQty] of diffDeductions.entries()) {
+      if (diffQty > 0) {
+        const mat = await Material.findById(materialId);
+        if (mat && mat.actualStock === 0) {
+          return res.status(400).json({ 
+            success: false, 
+            message: `Không thể thêm sản phẩm vì nguyên liệu "${mat.name}" đã hết (tồn kho = 0).` 
+          });
+        }
+      }
+    }
+
+    // 4. Cập nhật kho nguyên liệu (trừ hoặc cộng thêm dựa trên diff)
+    try {
+      const updatePromises = [];
+      for (const [materialId, diffQty] of diffDeductions.entries()) {
+        if (diffQty === 0) continue;
+
+        updatePromises.push(
+          (async () => {
+            const mat = await Material.findById(materialId);
+            if (!mat) return;
+
+            const newStock = Math.max(0, mat.stock - diffQty);
+            const newActual = Math.max(0, mat.actualStock - diffQty);
+            const newStatus = calcStatus(newActual, mat.minStock);
+
+            await Material.findByIdAndUpdate(materialId, {
+              stock: newStock,
+              actualStock: newActual,
+              status: newStatus,
+            });
+          })()
+        );
+      }
+      await Promise.all(updatePromises);
+    } catch (deductErr) {
+      console.error('[updateOrder] Lỗi khi cập nhật nguyên liệu:', deductErr.message);
+    }
+
+    // 5. Cập nhật dữ liệu đơn hàng
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { items, total_price, logistics_cost, source, note, ordered_at },
+      { new: true, runValidators: true }
+    );
 
     res.status(200).json({ success: true, data: order, message: 'Đã cập nhật đơn hàng' });
   } catch (error) {
