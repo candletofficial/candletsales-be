@@ -92,13 +92,13 @@ exports.createOrder = async (req, res, next) => {
     // 1. Tính lượng nguyên liệu cần trừ & kiểm tra tồn kho
     const deductions = await buildMaterialDeductions(items);
     
-    // Kiểm tra xem có nguyên liệu nào bị hết hàng (actualStock === 0) không
+    // Kiểm tra xem số lượng nguyên liệu tồn kho có đủ đáp ứng không
     for (const [materialId, deductQty] of deductions.entries()) {
       const mat = await Material.findById(materialId);
-      if (mat && mat.actualStock === 0) {
+      if (mat && mat.actualStock < deductQty) {
         return res.status(400).json({ 
           success: false, 
-          message: `Không thể tạo đơn hàng vì nguyên liệu "${mat.name}" đã hết (tồn kho thực tế = 0).` 
+          message: `Không thể tạo đơn hàng vì nguyên liệu "${mat.name}" không đủ (yêu cầu: ${deductQty}, tồn kho: ${mat.actualStock}).` 
         });
       }
     }
@@ -183,10 +183,10 @@ exports.updateOrder = async (req, res, next) => {
     for (const [materialId, diffQty] of diffDeductions.entries()) {
       if (diffQty > 0) {
         const mat = await Material.findById(materialId);
-        if (mat && mat.actualStock === 0) {
+        if (mat && mat.actualStock < diffQty) {
           return res.status(400).json({ 
             success: false, 
-            message: `Không thể thêm sản phẩm vì nguyên liệu "${mat.name}" đã hết (tồn kho = 0).` 
+            message: `Không thể cập nhật đơn hàng vì nguyên liệu "${mat.name}" không đủ (cần thêm: ${diffQty}, tồn kho: ${mat.actualStock}).` 
           });
         }
       }
