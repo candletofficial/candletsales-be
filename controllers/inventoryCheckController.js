@@ -1,5 +1,6 @@
 const InventoryCheck = require('../models/InventoryCheck');
 const Material = require('../models/Material');
+const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 
 // [POST] /api/inventory-checks
 exports.createTicket = async (req, res) => {
@@ -47,6 +48,9 @@ exports.createTicket = async (req, res) => {
     });
 
     await newCheck.save();
+
+    // Kích hoạt trigger auto confirm
+    triggerAutoConfirmImports().catch(console.error);
 
     res.status(201).json({
       success: true,

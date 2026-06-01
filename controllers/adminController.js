@@ -235,10 +235,10 @@ exports.getDashboardStats = async (req, res) => {
     const adCostGrowth = adPrevTotal === 0 ? null : ((adCurrentTotal - adPrevTotal) / adPrevTotal * 100);
 
     const currentCOGS = ordersCurrent.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
     const prevCOGS = ordersPrev.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
 
     const currentLogistics = ordersCurrent.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
@@ -262,7 +262,7 @@ exports.getDashboardStats = async (req, res) => {
       const dateKey = getLocalDateString(new Date(o.ordered_at));
       if (chartDataMap[dateKey]) {
         chartDataMap[dateKey].revenue += (o.total_price || 0);
-        const cogs = (o.items || []).reduce((sum, item) => sum + ((item.unit_cost || 0) * item.quantity), 0);
+        const cogs = (o.items || []).reduce((sum, item) => sum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
         const logistics = (o.logistics_cost || 0);
         chartDataMap[dateKey].cogs += cogs;
         chartDataMap[dateKey].cost += cogs + logistics;

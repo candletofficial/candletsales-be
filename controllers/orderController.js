@@ -1,6 +1,8 @@
 const Order = require('../models/Order');
-const Product = require('../models/Product');
 const Material = require('../models/Material');
+const Product = require('../models/Product');
+const ShippingConfig = require('../models/ShippingConfig');
+const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -16,9 +18,9 @@ const calcStatus = (actualStock, minStock) => {
 
 /**
  * Tính toán lượng nguyên liệu cần trừ cho một item đơn hàng.
- * Trả về Map<ingredient_id_string, totalQuantity>
+ * Trả về { deductions: Map<ingredient_id_string, totalQuantity>, packagingCost: Number }
  */
-const buildMaterialDeductions = async (items) => {
+const buildMaterialDeductions = async (items, shippingMethod = 'standard') => {
   // Gom product_id cần fetch
   const productIds = [...new Set(items.map(i => i.product_id))];
   const products = await Product.find({ _id: { $in: productIds } });
@@ -54,7 +56,22 @@ const buildMaterialDeductions = async (items) => {
     }
   }
 
-  return deductions;
+  // 3. Trừ thêm nguyên liệu theo phương thức vận chuyển
+  let packagingCost = 0;
+  if (shippingMethod) {
+    const shippingConfig = await ShippingConfig.findOne({ method: shippingMethod });
+    if (shippingConfig && shippingConfig.materials && shippingConfig.materials.length > 0) {
+      for (const sm of shippingConfig.materials) {
+        addDeduct(sm.material_id, sm.quantity);
+        const mat = await Material.findById(sm.material_id);
+        if (mat) {
+          packagingCost += (mat.price || 0) * sm.quantity;
+        }
+      }
+    }
+  }
+
+  return { deductions, packagingCost };
 };
 
 // GET /api/orders
@@ -83,14 +100,14 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, note, ordered_at } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
     }
 
-    // 1. Tính lượng nguyên liệu cần trừ & kiểm tra tồn kho
-    const deductions = await buildMaterialDeductions(items);
+    // 1. Tính lượng nguyên liệu cần trừ & kiểm tra tồn kho & tính phí đóng gói
+    const { deductions, packagingCost } = await buildMaterialDeductions(items, shippingMethod);
     
     // Kiểm tra xem số lượng nguyên liệu tồn kho có đủ đáp ứng không
     for (const [materialId, deductQty] of deductions.entries()) {
@@ -111,6 +128,8 @@ exports.createOrder = async (req, res, next) => {
       total_price,
       logistics_cost: logistics_cost || 0,
       source: source || 'khác',
+      shippingMethod: shippingMethod || 'standard',
+      packaging_cost: packagingCost,
       note: note || '',
       ordered_at: ordered_at || new Date(),
     });
@@ -141,8 +160,10 @@ exports.createOrder = async (req, res, next) => {
       // Không roll back đơn hàng, chỉ log lỗi trừ kho
       console.error('[createOrder] Lỗi khi trừ nguyên liệu:', deductErr.message);
     }
+    // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
+    triggerAutoConfirmImports().catch(console.error);
 
-    res.status(201).json({ success: true, data: order, message: 'Đã tạo đơn hàng thành công' });
+    return res.status(201).json({ success: true, data: order, message: 'Đã tạo đơn hàng thành công' });
   } catch (error) {
     next(error);
   }
@@ -151,7 +172,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, note, ordered_at } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -163,8 +184,12 @@ exports.updateOrder = async (req, res, next) => {
     }
 
     // 1. Tính toán lượng nguyên liệu cũ và mới
-    const oldDeductions = await buildMaterialDeductions(oldOrder.items);
-    const newDeductions = await buildMaterialDeductions(items);
+    const oldResult = await buildMaterialDeductions(oldOrder.items, oldOrder.shippingMethod);
+    const newResult = await buildMaterialDeductions(items, shippingMethod);
+    
+    const oldDeductions = oldResult.deductions;
+    const newDeductions = newResult.deductions;
+    const packagingCost = newResult.packagingCost;
 
     // 2. Tính sự chênh lệch (diff = new - old)
     // Nếu diff > 0 nghĩa là cần trừ thêm nguyên liệu. Nếu diff < 0 nghĩa là hoàn trả lại nguyên liệu.
@@ -223,9 +248,12 @@ exports.updateOrder = async (req, res, next) => {
     // 5. Cập nhật dữ liệu đơn hàng
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { items, total_price, logistics_cost, source, note, ordered_at },
+      { items, total_price, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, ordered_at },
       { new: true, runValidators: true }
     );
+
+    // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
+    triggerAutoConfirmImports().catch(console.error);
 
     res.status(200).json({ success: true, data: order, message: 'Đã cập nhật đơn hàng' });
   } catch (error) {
@@ -245,7 +273,7 @@ exports.deleteOrder = async (req, res, next) => {
     // Hoàn lại số lượng nguyên liệu nếu có yêu cầu
     if (restoreStock === 'true') {
       try {
-        const refunds = await buildMaterialDeductions(order.items);
+        const { deductions: refunds } = await buildMaterialDeductions(order.items, order.shippingMethod);
         const updatePromises = [];
         for (const [materialId, refundQty] of refunds.entries()) {
           updatePromises.push(

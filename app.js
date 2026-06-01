@@ -11,7 +11,8 @@ const orderRoutes = require('./routes/orderRoutes');
 const adCostRoutes = require('./routes/adCostRoutes');
 const importRoutes = require('./routes/importRoutes');
 const inventoryCheckRoutes = require('./routes/inventoryCheckRoutes');
-
+const shippingConfigRoutes = require('./routes/shippingConfigRoutes');
+const systemConfigRoutes = require('./routes/systemConfigRoutes');
 const app = express();
 
 // ── Middlewares ──────────────────────────────────────────────────
@@ -32,6 +33,8 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/ad-costs', adCostRoutes);
 app.use('/api/imports', importRoutes);
 app.use('/api/inventory-checks', inventoryCheckRoutes);
+app.use('/api/shipping-config', shippingConfigRoutes);
+app.use('/api/system-configs', systemConfigRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

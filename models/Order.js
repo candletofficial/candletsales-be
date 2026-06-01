@@ -31,6 +31,12 @@ const orderSchema = new mongoose.Schema({
     enum: ['shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'], 
     default: 'khác' 
   },
+  shippingMethod: {
+    type: String,
+    enum: ['standard', 'express'],
+    default: 'standard'
+  },
+  packaging_cost: { type: Number, default: 0 },
   note: { type: String, default: '' },
   ordered_at: { type: Date, default: Date.now },
 }, { timestamps: true });

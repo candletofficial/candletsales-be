@@ -1,5 +1,6 @@
 const ImportTicket = require('../models/ImportTicket');
 const Material = require('../models/Material');
+const SystemConfig = require('../models/SystemConfig');
 
 // Lấy danh sách phiếu nhập
 exports.getImportTickets = async (req, res) => {
@@ -38,8 +39,42 @@ exports.createImportTicket = async (req, res) => {
       status: 'pending'
     });
 
+    // --- LOGIC TỰ ĐỘNG DUYỆT (AUTO CONFIRM) ---
+    let autoConfirm = false;
+    const config = await SystemConfig.findOne({ key: 'auto_confirm_out_of_stock_imports' });
+    if (config && config.value === true) {
+      // Kiểm tra xem có nguyên liệu nào trong phiếu đang hết hàng (actualStock === 0) không
+      for (const item of formattedItems) {
+        const mat = await Material.findById(item.material_id);
+        if (mat && mat.actualStock === 0) {
+          autoConfirm = true;
+          break;
+        }
+      }
+    }
+
+    if (autoConfirm) {
+      newTicket.status = 'completed';
+      newTicket.completed_at = new Date();
+      
+      // Cập nhật lại số lượng kho của các nguyên liệu
+      for (let item of newTicket.items) {
+        const material = await Material.findById(item.material_id);
+        if (material) {
+          material.stock += item.quantity;
+          material.actualStock += item.quantity;
+          material.price = item.unit_price; 
+          await material.save();
+        }
+      }
+    }
+
     await newTicket.save();
-    res.status(201).json({ success: true, data: newTicket, message: 'Tạo phiếu nhập thành công' });
+    res.status(201).json({ 
+      success: true, 
+      data: newTicket, 
+      message: autoConfirm ? 'Tạo và tự động duyệt phiếu nhập (do có nguyên liệu hết kho)' : 'Tạo phiếu nhập thành công' 
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Lỗi server khi tạo phiếu nhập' });
   }
