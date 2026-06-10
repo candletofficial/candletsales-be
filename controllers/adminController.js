@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Order = require('../models/Order');
 const Material = require('../models/Material');
 const AdCost = require('../models/AdCost');
+const ImportTicket = require('../models/ImportTicket');
 
 // @desc    Lấy danh sách tài khoản (có filter theo status)
 // @route   GET /api/admin/users
@@ -210,22 +211,33 @@ exports.getDashboardStats = async (req, res) => {
     const [
       ordersCurrent, ordersPrev,
       adsCurrent, adsPrev,
-      materials
+      materials,
+      recentOrders,
+      recentImports,
+      lowStockMaterials
     ] = await Promise.all([
       Order.find({ ordered_at: { $gte: startOfCurrentPeriod, $lte: endOfPeriod } }),
       Order.find({ ordered_at: { $gte: startOfPrevPeriod, $lte: endOfPrevPeriod } }),
       AdCost.find({ date: { $gte: startOfCurrentPeriod, $lte: endOfPeriod } }),
       AdCost.find({ date: { $gte: startOfPrevPeriod, $lte: endOfPrevPeriod } }),
-      Material.find({})
+      Material.find({}),
+      Order.find({}).sort({ ordered_at: -1 }).limit(15),
+      ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
+      Material.find({ status: { $in: ['low_stock', 'out_of_stock'] } }).limit(5)
     ]);
 
     // 1. Calculate main metrics
-    const revCurrent = ordersCurrent.reduce((sum, o) => sum + (o.total_price || 0), 0);
-    const revPrev = ordersPrev.reduce((sum, o) => sum + (o.total_price || 0), 0);
+    const completedCurrent = ordersCurrent.filter(o => (o.status || 'completed') === 'completed');
+    const returnedCurrent = ordersCurrent.filter(o => o.status === 'returned');
+    const completedPrev = ordersPrev.filter(o => (o.status || 'completed') === 'completed');
+    const returnedPrev = ordersPrev.filter(o => o.status === 'returned');
+
+    const revCurrent = completedCurrent.reduce((sum, o) => sum + (o.is_replacement ? 0 : (o.total_price || 0)), 0);
+    const revPrev = completedPrev.reduce((sum, o) => sum + (o.is_replacement ? 0 : (o.total_price || 0)), 0);
     const revenueGrowth = revPrev === 0 ? null : ((revCurrent - revPrev) / revPrev * 100);
 
-    const ordCurrent = ordersCurrent.length;
-    const ordPrev = ordersPrev.length;
+    const ordCurrent = ordersCurrent.filter(o => !o.is_replacement).length;
+    const ordPrev = ordersPrev.filter(o => !o.is_replacement).length;
     const ordersGrowth = ordPrev === 0 ? null : ((ordCurrent - ordPrev) / ordPrev * 100);
 
     const inventoryValue = materials.reduce((sum, m) => sum + (m.actualStock * (m.price || 0)), 0);
@@ -234,18 +246,31 @@ exports.getDashboardStats = async (req, res) => {
     const adPrevTotal = adsPrev.reduce((sum, a) => sum + a.amount, 0);
     const adCostGrowth = adPrevTotal === 0 ? null : ((adCurrentTotal - adPrevTotal) / adPrevTotal * 100);
 
-    const currentCOGS = ordersCurrent.reduce((sum, o) => {
+    const normalCompletedCurrent = completedCurrent.filter(o => !o.is_replacement);
+    const replacementCurrent = completedCurrent.filter(o => o.is_replacement);
+
+    const currentCOGS = normalCompletedCurrent.reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
-    const prevCOGS = ordersPrev.reduce((sum, o) => {
+    const prevCOGS = completedPrev.filter(o => !o.is_replacement).reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
 
-    const currentLogistics = ordersCurrent.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
-    const prevLogistics = ordersPrev.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
+    const currentLogistics = normalCompletedCurrent.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
+    const prevLogistics = completedPrev.filter(o => !o.is_replacement).reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
 
-    const realProfitCurrent = revCurrent - currentCOGS - adCurrentTotal - currentLogistics;
-    const realProfitPrev = revPrev - prevCOGS - adPrevTotal - prevLogistics;
+    const currentReplacementCost = replacementCurrent.reduce((sum, o) => {
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+    }, 0);
+    const prevReplacementCost = completedPrev.filter(o => o.is_replacement).reduce((sum, o) => {
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+    }, 0);
+
+    const currentReturnCosts = returnedCurrent.reduce((sum, o) => sum + (o.return_cost || 0), 0);
+    const prevReturnCosts = returnedPrev.reduce((sum, o) => sum + (o.return_cost || 0), 0);
+
+    const realProfitCurrent = revCurrent - currentCOGS - adCurrentTotal - currentLogistics - currentReturnCosts - currentReplacementCost;
+    const realProfitPrev = revPrev - prevCOGS - adPrevTotal - prevLogistics - prevReturnCosts - prevReplacementCost;
     const realProfitGrowth = realProfitPrev === 0 ? null : ((realProfitCurrent - realProfitPrev) / Math.abs(realProfitPrev) * 100);
 
     // 2. Chart data (X days)
@@ -261,11 +286,17 @@ exports.getDashboardStats = async (req, res) => {
     ordersCurrent.forEach(o => {
       const dateKey = getLocalDateString(new Date(o.ordered_at));
       if (chartDataMap[dateKey]) {
-        chartDataMap[dateKey].revenue += (o.total_price || 0);
-        const cogs = (o.items || []).reduce((sum, item) => sum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
-        const logistics = (o.logistics_cost || 0);
-        chartDataMap[dateKey].cogs += cogs;
-        chartDataMap[dateKey].cost += cogs + logistics;
+        if ((o.status || 'completed') === 'completed') {
+          if (!o.is_replacement) {
+            chartDataMap[dateKey].revenue += (o.total_price || 0);
+          }
+          const cogs = (o.items || []).reduce((sum, item) => sum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
+          const logistics = (o.logistics_cost || 0);
+          chartDataMap[dateKey].cogs += cogs;
+          chartDataMap[dateKey].cost += cogs + logistics;
+        } else if (o.status === 'returned') {
+          chartDataMap[dateKey].cost += (o.return_cost || 0);
+        }
       }
     });
 
@@ -282,15 +313,128 @@ exports.getDashboardStats = async (req, res) => {
     // 3. Cost structure (Ads, Inventory/COGS, Logistics)
     const totalCOGS = chartData.reduce((sum, d) => sum + d.cogs, 0);
     const totalAds = adCurrentTotal;
-    const totalLogistics = currentLogistics;
+    const totalLogisticsAndReturns = currentLogistics + currentReturnCosts;
     
-    const totalCostForStructure = totalCOGS + totalAds + totalLogistics;
+    const totalCostForStructure = totalCOGS + totalAds + totalLogisticsAndReturns;
     
     const costStructure = {
       ads: totalCostForStructure > 0 ? (totalAds / totalCostForStructure * 100) : 0,
       inventory: totalCostForStructure > 0 ? (totalCOGS / totalCostForStructure * 100) : 0,
-      logistics: totalCostForStructure > 0 ? (totalLogistics / totalCostForStructure * 100) : 0
+      logistics: totalCostForStructure > 0 ? (totalLogisticsAndReturns / totalCostForStructure * 100) : 0
     };
+
+
+    // 4. Platform Stats (per source)
+    const platformMap = {};
+    const allCompletedOrders = [...normalCompletedCurrent, ...replacementCurrent];
+    ordersCurrent.forEach(o => {
+      const src = o.source || 'khác';
+      if (!platformMap[src]) {
+        platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0 };
+      }
+      if ((o.status || 'completed') === 'completed') {
+        if (!o.is_replacement) {
+          platformMap[src].orders += 1;
+          platformMap[src].revenue += (o.total_price || 0);
+        } else {
+          platformMap[src].replacements += 1;
+        }
+      } else if (o.status === 'returned') {
+        platformMap[src].returned += 1;
+      }
+    });
+    const platformStats = Object.values(platformMap).sort((a, b) => b.revenue - a.revenue);
+
+    // 5. Product Stats (per product)
+    const productMap = {};
+    normalCompletedCurrent.forEach(o => {
+      const orderTotalRaw = (o.items || []).reduce((sum, item) => sum + ((item.unit_price || 0) * item.quantity), 0);
+      const orderNetRevenue = o.total_price || 0;
+
+      (o.items || []).forEach(item => {
+        const key = item.productId || String(item.product_id);
+        if (!productMap[key]) {
+          productMap[key] = {
+            productId: item.productId,
+            product_name: item.product_name,
+            product_image: item.product_image || null,
+            totalQty: 0,
+            totalRevenue: 0,
+            totalCOGS: 0,
+            returnedQty: 0,
+          };
+        }
+        productMap[key].totalQty += item.quantity;
+        
+        if (orderTotalRaw > 0) {
+           const itemShare = ((item.unit_price || 0) * item.quantity) / orderTotalRaw;
+           productMap[key].totalRevenue += (orderNetRevenue * itemShare);
+        } else {
+           productMap[key].totalRevenue += orderNetRevenue;
+        }
+
+        productMap[key].totalCOGS += (item.unit_cost || 0) * item.quantity;
+      });
+    });
+    // Count returned items
+    returnedCurrent.forEach(o => {
+      (o.items || []).forEach(item => {
+        const key = item.productId || String(item.product_id);
+        if (productMap[key]) {
+          productMap[key].returnedQty += item.quantity;
+        }
+      });
+    });
+
+    // Allocate ad cost per product proportional to revenue
+    const totalRevenueForAdAlloc = revCurrent;
+    const productStats = Object.values(productMap).map(p => {
+      const grossMargin = p.totalRevenue > 0 ? ((p.totalRevenue - p.totalCOGS) / p.totalRevenue) * 100 : 0;
+      const adShare = totalRevenueForAdAlloc > 0 ? (p.totalRevenue / totalRevenueForAdAlloc) * adCurrentTotal : 0;
+      const netProfit = p.totalRevenue - p.totalCOGS - adShare;
+      const netMargin = p.totalRevenue > 0 ? (netProfit / p.totalRevenue) * 100 : 0;
+      const returnRate = (p.totalQty + p.returnedQty) > 0 ? (p.returnedQty / (p.totalQty + p.returnedQty)) * 100 : 0;
+      return {
+        ...p,
+        grossMargin: Number(grossMargin.toFixed(1)),
+        netMargin: Number(netMargin.toFixed(1)),
+        netProfit: Math.round(netProfit),
+        adShare: Math.round(adShare),
+        returnRate: Number(returnRate.toFixed(1)),
+      };
+    });
+
+    const recentActivities = [];
+    recentOrders.forEach(o => {
+      const sourceName = o.source ? o.source.charAt(0).toUpperCase() + o.source.slice(1) : 'Hệ thống';
+      recentActivities.push({
+        type: 'order',
+        title: `Đơn hàng mới #${o.orderId || o._id.toString().slice(-4).toUpperCase()}`,
+        subtitle: `Khách từ ${sourceName} vừa đặt hàng`,
+        detail: `${(o.total_price || 0).toLocaleString('vi-VN')} ₫`,
+        time: o.ordered_at
+      });
+    });
+    recentImports.forEach(t => {
+      const itemsCount = t.items ? t.items.length : 0;
+      recentActivities.push({
+        type: 'import',
+        title: `Cập nhật kho hàng`,
+        subtitle: `Đã nhập phiếu ${t.code} (${itemsCount} loại NVL)`,
+        detail: `${(t.total_amount || 0).toLocaleString('vi-VN')} ₫`,
+        time: t.completed_at || t.updatedAt
+      });
+    });
+    lowStockMaterials.forEach(m => {
+      recentActivities.push({
+        type: 'warning',
+        title: `Cảnh báo tồn kho`,
+        subtitle: `Vật tư "${m.name}" sắp hết hàng`,
+        detail: `Còn lại: ${m.actualStock} ${m.unit || ''}`,
+        time: new Date()
+      });
+    });
+    recentActivities.sort((a, b) => new Date(b.time) - new Date(a.time));
 
     res.status(200).json({
       success: true,
@@ -305,10 +449,23 @@ exports.getDashboardStats = async (req, res) => {
         adCostGrowth: adCostGrowth !== null ? Number(adCostGrowth.toFixed(1)) : null,
         realProfit: realProfitCurrent,
         realProfitGrowth: realProfitGrowth !== null ? Number(realProfitGrowth.toFixed(1)) : null,
+        returnedOrders: returnedCurrent.length,
+        returnRate: ordCurrent > 0 ? Number(((returnedCurrent.length / ordCurrent) * 100).toFixed(1)) : 0,
+        returnCost: currentReturnCosts,
+        cogs: currentCOGS,
+        logisticsCost: currentLogistics,
+        replacementCost: currentReplacementCost,
+        replacementOrders: replacementCurrent.length,
+        platformStats,
+        productStats,
         chartData,
-        costStructure
+        costStructure,
+        recentOrders,
+        allOrders: ordersCurrent,
+        recentActivities: recentActivities.slice(0, 10)
       }
     });
+
 
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

@@ -38,7 +38,16 @@ const orderSchema = new mongoose.Schema({
   },
   packaging_cost: { type: Number, default: 0 },
   note: { type: String, default: '' },
+  is_replacement: { type: Boolean, default: false },
   ordered_at: { type: Date, default: Date.now },
+  // Trạng thái đơn hàng
+  status: {
+    type: String,
+    enum: ['completed', 'returned'],
+    default: 'completed',
+  },
+  return_cost: { type: Number, default: 0 },   // Chi phí hoàn (lấy từ cấu hình khi đánh dấu hoàn)
+  returned_at: { type: Date, default: null },   // Thời điểm đánh dấu hoàn
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', orderSchema);

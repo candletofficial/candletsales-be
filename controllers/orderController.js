@@ -2,6 +2,7 @@ const Order = require('../models/Order');
 const Material = require('../models/Material');
 const Product = require('../models/Product');
 const ShippingConfig = require('../models/ShippingConfig');
+const SystemConfig = require('../models/SystemConfig');
 const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 
 // Helper tạo orderId ngẫu nhiên
@@ -100,10 +101,23 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
+    }
+
+    // Xác định orderId: dùng từ client (nhập tay) hoặc tự sinh nếu không có
+    let orderId;
+    if (clientOrderId && clientOrderId.trim()) {
+      orderId = clientOrderId.trim();
+      // Kiểm tra trùng lặp
+      const existing = await Order.findOne({ orderId });
+      if (existing) {
+        return res.status(400).json({ success: false, message: `Mã đơn hàng "${orderId}" đã tồn tại. Vui lòng nhập mã khác.` });
+      }
+    } else {
+      orderId = generateOrderId();
     }
 
     // 1. Tính lượng nguyên liệu cần trừ & kiểm tra tồn kho & tính phí đóng gói
@@ -121,7 +135,6 @@ exports.createOrder = async (req, res, next) => {
     }
 
     // 2. Tạo đơn hàng
-    const orderId = generateOrderId();
     const order = await Order.create({
       orderId,
       items,
@@ -131,6 +144,7 @@ exports.createOrder = async (req, res, next) => {
       shippingMethod: shippingMethod || 'standard',
       packaging_cost: packagingCost,
       note: note || '',
+      is_replacement: is_replacement || false,
       ordered_at: ordered_at || new Date(),
     });
 
@@ -172,7 +186,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, is_replacement } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -181,6 +195,11 @@ exports.updateOrder = async (req, res, next) => {
     const oldOrder = await Order.findById(req.params.id);
     if (!oldOrder) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+    }
+
+    // Không cho phép chỉnh sửa đơn hàng đã bị hoàn
+    if (oldOrder.status === 'returned') {
+      return res.status(400).json({ success: false, message: 'Không thể chỉnh sửa đơn hàng đã bị hoàn' });
     }
 
     // 1. Tính toán lượng nguyên liệu cũ và mới
@@ -248,7 +267,7 @@ exports.updateOrder = async (req, res, next) => {
     // 5. Cập nhật dữ liệu đơn hàng
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { items, total_price, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, ordered_at },
+      { items, total_price, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, ordered_at },
       { new: true, runValidators: true }
     );
 
@@ -270,8 +289,11 @@ exports.deleteOrder = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
 
-    // Hoàn lại số lượng nguyên liệu nếu có yêu cầu
-    if (restoreStock === 'true') {
+    // Chỉ hoàn kho khi đơn CHƯA bị hoàn (completed).
+    // Đơn đã hoàn (returned) thì nguyên liệu đã được trả lại khi markAsReturned → không hoàn thêm.
+    const isReturned = order.status === 'returned';
+
+    if (restoreStock === 'true' && !isReturned) {
       try {
         const { deductions: refunds } = await buildMaterialDeductions(order.items, order.shippingMethod);
         const updatePromises = [];
@@ -299,7 +321,79 @@ exports.deleteOrder = async (req, res, next) => {
       }
     }
 
-    res.status(200).json({ success: true, message: 'Đã xóa đơn hàng' + (restoreStock === 'true' ? ' và hoàn lại nguyên liệu' : '') });
+    const msg = isReturned
+      ? 'Đã xóa đơn hàng bị hoàn (nguyên liệu đã được hoàn trước đó)'
+      : 'Đã xóa đơn hàng' + (restoreStock === 'true' ? ' và hoàn lại nguyên liệu' : '');
+    res.status(200).json({ success: true, message: msg });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PATCH /api/orders/:id/return
+exports.markAsReturned = async (req, res, next) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+    }
+
+    if (order.status === 'returned') {
+      return res.status(400).json({ success: false, message: 'Đơn hàng này đã được đánh dấu bị hoàn trước đó' });
+    }
+
+    // Đọc chi phí hoàn từ cấu hình hệ thống
+    const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' });
+    let returnCosts = {};
+    if (returnCostConfig && returnCostConfig.value) {
+      try {
+        returnCosts = JSON.parse(returnCostConfig.value);
+      } catch (e) {}
+    }
+    const orderSource = order.source || 'khác';
+    const returnCost = returnCosts[orderSource] ? Number(returnCosts[orderSource]) : 0;
+
+    // Hoàn lại nguyên liệu vào kho (chỉ hoàn sản phẩm, không hoàn bao bì vận chuyển vì đã hỏng/sử dụng)
+    try {
+      const { deductions: refunds } = await buildMaterialDeductions(order.items, null);
+      const updatePromises = [];
+      for (const [materialId, refundQty] of refunds.entries()) {
+        updatePromises.push(
+          (async () => {
+            const mat = await Material.findById(materialId);
+            if (!mat) return;
+            const newStock = mat.stock + refundQty;
+            const newActual = mat.actualStock + refundQty;
+            const newStatus = calcStatus(newActual, mat.minStock);
+            await Material.findByIdAndUpdate(materialId, {
+              stock: newStock,
+              actualStock: newActual,
+              status: newStatus,
+            });
+          })()
+        );
+      }
+      await Promise.all(updatePromises);
+    } catch (refundErr) {
+      console.error('[markAsReturned] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
+    }
+
+    // Cập nhật trạng thái đơn hàng
+    const updatedOrder = await Order.findByIdAndUpdate(
+      req.params.id,
+      {
+        status: 'returned',
+        return_cost: returnCost,
+        returned_at: new Date(),
+      },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: updatedOrder,
+      message: `Đã đánh dấu đơn hàng bị hoàn. Chi phí hoàn: ${returnCost.toLocaleString('vi-VN')}đ`,
+    });
   } catch (error) {
     next(error);
   }
