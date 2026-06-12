@@ -7,6 +7,7 @@ const auth = require('../middlewares/authMiddleware'); // admin middleware if pr
 
 router.get('/', importController.getImportTickets);
 router.post('/', importController.createImportTicket);
+router.put('/:id', importController.updateImportTicket);
 router.put('/:id/complete', importController.completeImportTicket);
 router.delete('/:id', importController.deleteImportTicket);
 

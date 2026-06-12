@@ -114,6 +114,41 @@ exports.completeImportTicket = async (req, res) => {
   }
 };
 
+// Cập nhật phiếu nhập (chỉ khi pending)
+exports.updateImportTicket = async (req, res) => {
+  try {
+    const ticket = await ImportTicket.findById(req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập' });
+    }
+    if (ticket.status === 'completed') {
+      return res.status(400).json({ success: false, message: 'Không thể sửa phiếu đã hoàn thành' });
+    }
+
+    const { items, total_amount, note, imported_by } = req.body;
+    
+    // Tính toán lại unit_price
+    const formattedItems = items.map(item => ({
+      ...item,
+      unit_price: item.quantity > 0 ? (item.total_price / item.quantity) : 0
+    }));
+
+    ticket.items = formattedItems;
+    ticket.total_amount = total_amount;
+    ticket.note = note;
+    if (imported_by) ticket.imported_by = imported_by;
+
+    await ticket.save();
+    
+    // populate to return full info if needed
+    const updatedTicket = await ImportTicket.findById(ticket._id).populate('items.material_id', 'name sku unit price');
+
+    res.json({ success: true, data: updatedTicket, message: 'Cập nhật phiếu nhập thành công' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Lỗi server khi cập nhật phiếu nhập' });
+  }
+};
+
 // Xoá phiếu nhập
 exports.deleteImportTicket = async (req, res) => {
   try {

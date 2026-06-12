@@ -3,6 +3,7 @@ const Order = require('../models/Order');
 const Material = require('../models/Material');
 const AdCost = require('../models/AdCost');
 const ImportTicket = require('../models/ImportTicket');
+const InventoryCheck = require('../models/InventoryCheck');
 
 // @desc    Lấy danh sách tài khoản (có filter theo status)
 // @route   GET /api/admin/users
@@ -214,7 +215,7 @@ exports.getDashboardStats = async (req, res) => {
       materials,
       recentOrders,
       recentImports,
-      lowStockMaterials
+      recentInventoryChecks
     ] = await Promise.all([
       Order.find({ ordered_at: { $gte: startOfCurrentPeriod, $lte: endOfPeriod } }),
       Order.find({ ordered_at: { $gte: startOfPrevPeriod, $lte: endOfPrevPeriod } }),
@@ -223,7 +224,7 @@ exports.getDashboardStats = async (req, res) => {
       Material.find({}),
       Order.find({}).sort({ ordered_at: -1 }).limit(15),
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
-      Material.find({ status: { $in: ['low_stock', 'out_of_stock'] } }).limit(5)
+      InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3)
     ]);
 
     // 1. Calculate main metrics
@@ -362,16 +363,35 @@ exports.getDashboardStats = async (req, res) => {
             totalRevenue: 0,
             totalCOGS: 0,
             returnedQty: 0,
+            variantsMap: {},
           };
         }
         productMap[key].totalQty += item.quantity;
         
+        const variantKey = item.sku_id || 'default';
+        if (!productMap[key].variantsMap[variantKey]) {
+          productMap[key].variantsMap[variantKey] = {
+            sku_id: item.sku_id,
+            sku_label: item.sku_label || 'Mặc định',
+            totalQty: 0,
+            totalRevenue: 0,
+            totalCOGS: 0,
+            returnedQty: 0,
+          };
+        }
+        productMap[key].variantsMap[variantKey].totalQty += item.quantity;
+        productMap[key].variantsMap[variantKey].totalCOGS += (item.unit_cost || 0) * item.quantity;
+        
+        let itemRevenue = 0;
         if (orderTotalRaw > 0) {
            const itemShare = ((item.unit_price || 0) * item.quantity) / orderTotalRaw;
-           productMap[key].totalRevenue += (orderNetRevenue * itemShare);
+           itemRevenue = (orderNetRevenue * itemShare);
+           productMap[key].totalRevenue += itemRevenue;
         } else {
-           productMap[key].totalRevenue += orderNetRevenue;
+           itemRevenue = orderNetRevenue;
+           productMap[key].totalRevenue += itemRevenue;
         }
+        productMap[key].variantsMap[variantKey].totalRevenue += itemRevenue;
 
         productMap[key].totalCOGS += (item.unit_cost || 0) * item.quantity;
       });
@@ -382,6 +402,10 @@ exports.getDashboardStats = async (req, res) => {
         const key = item.productId || String(item.product_id);
         if (productMap[key]) {
           productMap[key].returnedQty += item.quantity;
+          const variantKey = item.sku_id || 'default';
+          if (productMap[key].variantsMap && productMap[key].variantsMap[variantKey]) {
+            productMap[key].variantsMap[variantKey].returnedQty += item.quantity;
+          }
         }
       });
     });
@@ -394,8 +418,28 @@ exports.getDashboardStats = async (req, res) => {
       const netProfit = p.totalRevenue - p.totalCOGS - adShare;
       const netMargin = p.totalRevenue > 0 ? (netProfit / p.totalRevenue) * 100 : 0;
       const returnRate = (p.totalQty + p.returnedQty) > 0 ? (p.returnedQty / (p.totalQty + p.returnedQty)) * 100 : 0;
+      
+      const variants = Object.values(p.variantsMap || {}).map(v => {
+         const vGrossMargin = v.totalRevenue > 0 ? ((v.totalRevenue - v.totalCOGS) / v.totalRevenue) * 100 : 0;
+         const vAdShare = totalRevenueForAdAlloc > 0 ? (v.totalRevenue / totalRevenueForAdAlloc) * adCurrentTotal : 0;
+         const vNetProfit = v.totalRevenue - v.totalCOGS - vAdShare;
+         const vNetMargin = v.totalRevenue > 0 ? (vNetProfit / v.totalRevenue) * 100 : 0;
+         const vReturnRate = (v.totalQty + v.returnedQty) > 0 ? (v.returnedQty / (v.totalQty + v.returnedQty)) * 100 : 0;
+         return {
+            ...v,
+            grossMargin: Number(vGrossMargin.toFixed(1)),
+            netMargin: Number(vNetMargin.toFixed(1)),
+            netProfit: Math.round(vNetProfit),
+            adShare: Math.round(vAdShare),
+            returnRate: Number(vReturnRate.toFixed(1))
+         };
+      }).sort((a,b) => b.totalRevenue - a.totalRevenue);
+
+      const { variantsMap, ...rest } = p;
+
       return {
-        ...p,
+        ...rest,
+        variants,
         grossMargin: Number(grossMargin.toFixed(1)),
         netMargin: Number(netMargin.toFixed(1)),
         netProfit: Math.round(netProfit),
@@ -425,16 +469,26 @@ exports.getDashboardStats = async (req, res) => {
         time: t.completed_at || t.updatedAt
       });
     });
-    lowStockMaterials.forEach(m => {
+    recentInventoryChecks.forEach(c => {
+      const itemsCount = c.items ? c.items.length : 0;
+      let totalDiff = 0;
+      if (c.items) {
+         totalDiff = c.items.reduce((sum, item) => sum + Math.abs(item.difference || 0), 0);
+      }
       recentActivities.push({
-        type: 'warning',
-        title: `Cảnh báo tồn kho`,
-        subtitle: `Vật tư "${m.name}" sắp hết hàng`,
-        detail: `Còn lại: ${m.actualStock} ${m.unit || ''}`,
-        time: new Date()
+        type: 'inventory_check',
+        title: `Kiểm kê kho hàng`,
+        subtitle: `Phiếu kiểm kho do ${c.checked_by || 'Admin'} thực hiện (${itemsCount} loại NVL)`,
+        detail: `Chênh lệch: ${totalDiff}`,
+        time: c.createdAt
       });
     });
-    recentActivities.sort((a, b) => new Date(b.time) - new Date(a.time));
+    
+    recentActivities.sort((a, b) => {
+      const timeA = new Date(a.time || 0).getTime();
+      const timeB = new Date(b.time || 0).getTime();
+      return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+    });
 
     res.status(200).json({
       success: true,
@@ -466,8 +520,78 @@ exports.getDashboardStats = async (req, res) => {
       }
     });
 
+  } catch (error) {
+    console.error('Lỗi khi lấy dashboard stats:', error);
+    res.status(500).json({ success: false, message: 'Lỗi server' });
+  }
+};
+
+// @desc    Lấy danh sách hoạt động gần đây
+// @route   GET /api/admin/activities
+exports.getRecentActivities = async (req, res) => {
+  try {
+    const [
+      recentOrders,
+      recentImports,
+      recentInventoryChecks
+    ] = await Promise.all([
+      Order.find({}).sort({ ordered_at: -1 }).limit(15),
+      ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
+      InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3)
+    ]);
+
+    const recentActivities = [];
+    recentOrders.forEach(o => {
+      const sourceName = o.source ? o.source.charAt(0).toUpperCase() + o.source.slice(1) : 'Hệ thống';
+      recentActivities.push({
+        type: 'order',
+        title: `Đơn hàng mới #${o.orderId || o._id.toString().slice(-4).toUpperCase()}`,
+        subtitle: `Khách từ ${sourceName} vừa đặt hàng`,
+        detail: `${(o.total_price || 0).toLocaleString('vi-VN')} ₫`,
+        time: o.ordered_at
+      });
+    });
+    recentImports.forEach(t => {
+      const itemsCount = t.items ? t.items.length : 0;
+      recentActivities.push({
+        type: 'import',
+        title: `Cập nhật kho hàng`,
+        subtitle: `Đã nhập phiếu ${t.code} (${itemsCount} loại NVL)`,
+        detail: `${(t.total_amount || 0).toLocaleString('vi-VN')} ₫`,
+        time: t.completed_at || t.updatedAt
+      });
+    });
+    recentInventoryChecks.forEach(c => {
+      const itemsCount = c.items ? c.items.length : 0;
+      let totalDiff = 0;
+      if (c.items) {
+         totalDiff = c.items.reduce((sum, item) => sum + Math.abs(item.difference || 0), 0);
+      }
+      recentActivities.push({
+        type: 'inventory_check',
+        title: `Kiểm kê kho hàng`,
+        subtitle: `Phiếu kiểm kho do ${c.checked_by || 'Admin'} thực hiện (${itemsCount} loại NVL)`,
+        detail: `Chênh lệch: ${totalDiff}`,
+        time: c.createdAt
+      });
+    });
+    
+    recentActivities.sort((a, b) => {
+      const timeA = new Date(a.time || 0).getTime();
+      const timeB = new Date(b.time || 0).getTime();
+      return (isNaN(b_time = timeB) ? 0 : b_time) - (isNaN(a_time = timeA) ? 0 : a_time);
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        recentOrders,
+        recentActivities: recentActivities.slice(0, 10)
+      }
+    });
 
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('Lỗi khi lấy hoạt động gần đây:', error);
+    res.status(500).json({ success: false, message: 'Lỗi server' });
   }
 };

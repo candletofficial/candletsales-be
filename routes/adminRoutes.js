@@ -8,6 +8,7 @@ const {
   deleteUser,
   getUserStats,
   getDashboardStats,
+  getRecentActivities
 } = require('../controllers/adminController');
 const { protect } = require('../middlewares/authMiddleware');
 
@@ -17,6 +18,7 @@ router.use(protect);
 router.get('/users/stats', getUserStats);
 router.get('/users', getUsers);
 router.get('/dashboard', getDashboardStats);
+router.get('/activities', getRecentActivities);
 router.put('/users/:id/approve', approveUser);
 router.put('/users/:id/reject', rejectUser);
 router.put('/users/:id/revoke', revokeUser);
