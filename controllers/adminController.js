@@ -350,7 +350,8 @@ exports.getDashboardStats = async (req, res) => {
     const productMap = {};
     normalCompletedCurrent.forEach(o => {
       const orderTotalRaw = (o.items || []).reduce((sum, item) => sum + ((item.unit_price || 0) * item.quantity), 0);
-      const orderNetRevenue = o.total_price || 0;
+      // Doanh thu thực tế của sản phẩm = Tổng tiền thu khách - Phí ship khách trả (tức là chỉ còn tiền hàng - giảm giá)
+      const orderNetRevenue = (o.total_price || 0) - (o.logistics_cost || 0);
 
       (o.items || []).forEach(item => {
         const key = item.productId || String(item.product_id);

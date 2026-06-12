@@ -101,7 +101,7 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, discount_amount, discount_code } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -144,9 +144,20 @@ exports.createOrder = async (req, res, next) => {
       shippingMethod: shippingMethod || 'standard',
       packaging_cost: packagingCost,
       note: note || '',
+      discount_amount: discount_amount || 0,
+      discount_code: discount_code || null,
       is_replacement: is_replacement || false,
       ordered_at: ordered_at || new Date(),
     });
+
+    // Cập nhật used_count của Coupon nếu có dùng mã giảm giá
+    if (discount_code && discount_amount > 0) {
+      const Coupon = require('../models/Coupon');
+      await Coupon.findOneAndUpdate(
+        { code: discount_code },
+        { $inc: { used_count: 1 } }
+      ).catch(err => console.error('[createOrder] Lỗi cập nhật used_count Coupon:', err.message));
+    }
 
     // 3. Cập nhật kho nguyên liệu (trừ stock)
     try {
@@ -186,7 +197,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, is_replacement } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, is_replacement, discount_amount, discount_code } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -267,7 +278,7 @@ exports.updateOrder = async (req, res, next) => {
     // 5. Cập nhật dữ liệu đơn hàng
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { items, total_price, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, ordered_at },
+      { items, total_price, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
       { new: true, runValidators: true }
     );
 

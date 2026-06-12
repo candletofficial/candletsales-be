@@ -38,6 +38,8 @@ const orderSchema = new mongoose.Schema({
   },
   packaging_cost: { type: Number, default: 0 },
   note: { type: String, default: '' },
+  discount_amount: { type: Number, default: 0 }, // Số tiền được giảm
+  discount_code: { type: String, default: null }, // Mã coupon đã dùng
   is_replacement: { type: Boolean, default: false },
   ordered_at: { type: Date, default: Date.now },
   // Trạng thái đơn hàng
