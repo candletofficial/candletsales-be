@@ -233,12 +233,12 @@ exports.getDashboardStats = async (req, res) => {
     const completedPrev = ordersPrev.filter(o => (o.status || 'completed') === 'completed');
     const returnedPrev = ordersPrev.filter(o => o.status === 'returned');
 
-    const revCurrent = completedCurrent.reduce((sum, o) => sum + (o.is_replacement ? 0 : (o.total_price || 0)), 0);
-    const revPrev = completedPrev.reduce((sum, o) => sum + (o.is_replacement ? 0 : (o.total_price || 0)), 0);
+    const revCurrent = completedCurrent.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
+    const revPrev = completedPrev.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
     const revenueGrowth = revPrev === 0 ? null : ((revCurrent - revPrev) / revPrev * 100);
 
-    const ordCurrent = ordersCurrent.filter(o => !o.is_replacement).length;
-    const ordPrev = ordersPrev.filter(o => !o.is_replacement).length;
+    const ordCurrent = ordersCurrent.filter(o => !o.is_replacement && !o.is_seeding).length;
+    const ordPrev = ordersPrev.filter(o => !o.is_replacement && !o.is_seeding).length;
     const ordersGrowth = ordPrev === 0 ? null : ((ordCurrent - ordPrev) / ordPrev * 100);
 
     const inventoryValue = materials.reduce((sum, m) => sum + (m.actualStock * (m.price || 0)), 0);
@@ -247,18 +247,21 @@ exports.getDashboardStats = async (req, res) => {
     const adPrevTotal = adsPrev.reduce((sum, a) => sum + a.amount, 0);
     const adCostGrowth = adPrevTotal === 0 ? null : ((adCurrentTotal - adPrevTotal) / adPrevTotal * 100);
 
-    const normalCompletedCurrent = completedCurrent.filter(o => !o.is_replacement);
+    const normalCompletedCurrent = completedCurrent.filter(o => !o.is_replacement && !o.is_seeding);
     const replacementCurrent = completedCurrent.filter(o => o.is_replacement);
+    const seedingCurrent = completedCurrent.filter(o => o.is_seeding);
+
+    const normalCompletedPrev = completedPrev.filter(o => !o.is_replacement && !o.is_seeding);
 
     const currentCOGS = normalCompletedCurrent.reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
-    const prevCOGS = completedPrev.filter(o => !o.is_replacement).reduce((sum, o) => {
+    const prevCOGS = normalCompletedPrev.reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
 
     const currentLogistics = normalCompletedCurrent.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
-    const prevLogistics = completedPrev.filter(o => !o.is_replacement).reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
+    const prevLogistics = normalCompletedPrev.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
 
     const currentReplacementCost = replacementCurrent.reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
@@ -267,11 +270,19 @@ exports.getDashboardStats = async (req, res) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
 
+    const currentSeedingCost = seedingCurrent.reduce((sum, o) => {
+      return sum + (o.seeding_cost || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+    }, 0);
+    const prevSeedingCost = completedPrev.filter(o => o.is_seeding).reduce((sum, o) => {
+      return sum + (o.seeding_cost || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+    }, 0);
+    const seedingCostGrowth = prevSeedingCost === 0 ? null : ((currentSeedingCost - prevSeedingCost) / prevSeedingCost * 100);
+
     const currentReturnCosts = returnedCurrent.reduce((sum, o) => sum + (o.return_cost || 0), 0);
     const prevReturnCosts = returnedPrev.reduce((sum, o) => sum + (o.return_cost || 0), 0);
 
-    const realProfitCurrent = revCurrent - currentCOGS - adCurrentTotal - currentLogistics - currentReturnCosts - currentReplacementCost;
-    const realProfitPrev = revPrev - prevCOGS - adPrevTotal - prevLogistics - prevReturnCosts - prevReplacementCost;
+    const realProfitCurrent = revCurrent - currentCOGS - adCurrentTotal - currentLogistics - currentReturnCosts - currentReplacementCost - currentSeedingCost;
+    const realProfitPrev = revPrev - prevCOGS - adPrevTotal - prevLogistics - prevReturnCosts - prevReplacementCost - prevSeedingCost;
     const realProfitGrowth = realProfitPrev === 0 ? null : ((realProfitCurrent - realProfitPrev) / Math.abs(realProfitPrev) * 100);
 
     // 2. Chart data (X days)
@@ -288,13 +299,13 @@ exports.getDashboardStats = async (req, res) => {
       const dateKey = getLocalDateString(new Date(o.ordered_at));
       if (chartDataMap[dateKey]) {
         if ((o.status || 'completed') === 'completed') {
-          if (!o.is_replacement) {
+          if (!o.is_replacement && !o.is_seeding) {
             chartDataMap[dateKey].revenue += (o.total_price || 0);
           }
           const cogs = (o.items || []).reduce((sum, item) => sum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
           const logistics = (o.logistics_cost || 0);
           chartDataMap[dateKey].cogs += cogs;
-          chartDataMap[dateKey].cost += cogs + logistics;
+          chartDataMap[dateKey].cost += cogs + logistics + (o.seeding_cost || 0);
         } else if (o.status === 'returned') {
           chartDataMap[dateKey].cost += (o.return_cost || 0);
         }
@@ -334,10 +345,10 @@ exports.getDashboardStats = async (req, res) => {
         platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0 };
       }
       if ((o.status || 'completed') === 'completed') {
-        if (!o.is_replacement) {
+        if (!o.is_replacement && !o.is_seeding) {
           platformMap[src].orders += 1;
           platformMap[src].revenue += (o.total_price || 0);
-        } else {
+        } else if (o.is_replacement) {
           platformMap[src].replacements += 1;
         }
       } else if (o.status === 'returned') {
@@ -511,6 +522,8 @@ exports.getDashboardStats = async (req, res) => {
         logisticsCost: currentLogistics,
         replacementCost: currentReplacementCost,
         replacementOrders: replacementCurrent.length,
+        seedingCost: currentSeedingCost,
+        seedingCostGrowth: seedingCostGrowth !== null ? Number(seedingCostGrowth.toFixed(1)) : null,
         platformStats,
         productStats,
         chartData,

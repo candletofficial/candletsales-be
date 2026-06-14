@@ -21,8 +21,13 @@ const orderSchema = new mongoose.Schema({
   },
   items: {
     type: [orderItemSchema],
-    required: true,
-    validate: [(arr) => arr.length > 0, 'Đơn hàng phải có ít nhất 1 sản phẩm'],
+    default: [],
+    validate: [
+      function (arr) {
+        return this.is_seeding || arr.length > 0;
+      },
+      'Đơn hàng bình thường phải có ít nhất 1 sản phẩm',
+    ],
   },
   total_price: { type: Number, required: true, min: 0 }, // admin có thể chỉnh tay
   logistics_cost: { type: Number, default: 0 },
@@ -41,6 +46,8 @@ const orderSchema = new mongoose.Schema({
   discount_amount: { type: Number, default: 0 }, // Số tiền được giảm
   discount_code: { type: String, default: null }, // Mã coupon đã dùng
   is_replacement: { type: Boolean, default: false },
+  is_seeding: { type: Boolean, default: false },
+  seeding_cost: { type: Number, default: 0 },
   ordered_at: { type: Date, default: Date.now },
   // Trạng thái đơn hàng
   status: {

@@ -101,9 +101,9 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, discount_amount, discount_code } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
 
-    if (!items || items.length === 0) {
+    if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
     }
 
@@ -137,8 +137,8 @@ exports.createOrder = async (req, res, next) => {
     // 2. Tạo đơn hàng
     const order = await Order.create({
       orderId,
-      items,
-      total_price,
+      items: items || [],
+      total_price: total_price || 0,
       logistics_cost: logistics_cost || 0,
       source: source || 'khác',
       shippingMethod: shippingMethod || 'standard',
@@ -147,6 +147,8 @@ exports.createOrder = async (req, res, next) => {
       discount_amount: discount_amount || 0,
       discount_code: discount_code || null,
       is_replacement: is_replacement || false,
+      is_seeding: is_seeding || false,
+      seeding_cost: seeding_cost || 0,
       ordered_at: ordered_at || new Date(),
     });
 
@@ -197,9 +199,9 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, is_replacement, discount_amount, discount_code } = req.body;
+    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
 
-    if (!items || items.length === 0) {
+    if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
     }
 
@@ -278,7 +280,7 @@ exports.updateOrder = async (req, res, next) => {
     // 5. Cập nhật dữ liệu đơn hàng
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { items, total_price, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
+      { items: items || [], total_price: total_price || 0, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, is_seeding: is_seeding || false, seeding_cost: seeding_cost || 0, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
       { new: true, runValidators: true }
     );
 
