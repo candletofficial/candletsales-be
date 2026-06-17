@@ -4,6 +4,7 @@ const Material = require('../models/Material');
 const AdCost = require('../models/AdCost');
 const ImportTicket = require('../models/ImportTicket');
 const InventoryCheck = require('../models/InventoryCheck');
+const FundTransaction = require('../models/FundTransaction');
 
 // @desc    Lấy danh sách tài khoản (có filter theo status)
 // @route   GET /api/admin/users
@@ -215,7 +216,8 @@ exports.getDashboardStats = async (req, res) => {
       materials,
       recentOrders,
       recentImports,
-      recentInventoryChecks
+      recentInventoryChecks,
+      recentFundTransactions
     ] = await Promise.all([
       Order.find({ ordered_at: { $gte: startOfCurrentPeriod, $lte: endOfPeriod } }),
       Order.find({ ordered_at: { $gte: startOfPrevPeriod, $lte: endOfPrevPeriod } }),
@@ -224,7 +226,8 @@ exports.getDashboardStats = async (req, res) => {
       Material.find({}),
       Order.find({}).sort({ ordered_at: -1 }).limit(15),
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
-      InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3)
+      InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
+      FundTransaction.find({}).sort({ createdAt: -1 }).limit(5)
     ]);
 
     // 1. Calculate main metrics
@@ -271,10 +274,10 @@ exports.getDashboardStats = async (req, res) => {
     }, 0);
 
     const currentSeedingCost = seedingCurrent.reduce((sum, o) => {
-      return sum + (o.seeding_cost || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
     const prevSeedingCost = completedPrev.filter(o => o.is_seeding).reduce((sum, o) => {
-      return sum + (o.seeding_cost || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
     const seedingCostGrowth = prevSeedingCost === 0 ? null : ((currentSeedingCost - prevSeedingCost) / prevSeedingCost * 100);
 
@@ -495,6 +498,28 @@ exports.getDashboardStats = async (req, res) => {
         time: c.createdAt
       });
     });
+
+    if (recentFundTransactions) {
+      recentFundTransactions.forEach(ft => {
+        let title = 'Giao dịch quỹ';
+        let type = 'fund';
+        if (ft.type === 'admin_deposit') { title = 'Góp vốn quỹ'; type = 'deposit'; }
+        else if (ft.type === 'revenue_withdrawal') { title = 'Rút doanh thu'; type = 'withdraw'; }
+        else if (ft.type === 'import_payment') { title = 'Thanh toán phiếu nhập'; type = 'payment'; }
+        else if (ft.type === 'seeding_payment') { title = 'Chi phí Seeding'; type = 'payment'; }
+        else if (ft.type === 'shipping_payment') { title = 'Phí giao hàng'; type = 'payment'; }
+        else if (ft.type === 'system_adjustment') { title = 'Đồng bộ hệ thống'; type = 'fund'; }
+        else if (ft.type === 'expense_payment') { title = 'Chi tiêu'; type = 'expense'; }
+        
+        recentActivities.push({
+          type: type,
+          title: title,
+          subtitle: `Do ${ft.created_by || 'Admin'} thực hiện`,
+          detail: `${ft.fund_change >= 0 ? '+' : ''}${(ft.fund_change || 0).toLocaleString('vi-VN')} ₫`,
+          time: ft.createdAt
+        });
+      });
+    }
     
     recentActivities.sort((a, b) => {
       const timeA = new Date(a.time || 0).getTime();
@@ -547,11 +572,13 @@ exports.getRecentActivities = async (req, res) => {
     const [
       recentOrders,
       recentImports,
-      recentInventoryChecks
+      recentInventoryChecks,
+      recentFundTransactions
     ] = await Promise.all([
       Order.find({}).sort({ ordered_at: -1 }).limit(15),
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
-      InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3)
+      InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
+      FundTransaction.find({}).sort({ createdAt: -1 }).limit(5)
     ]);
 
     const recentActivities = [];
@@ -589,6 +616,27 @@ exports.getRecentActivities = async (req, res) => {
         time: c.createdAt
       });
     });
+
+    if (recentFundTransactions) {
+      recentFundTransactions.forEach(ft => {
+        let title = 'Giao dịch quỹ';
+        let type = 'fund';
+        if (ft.type === 'admin_deposit') { title = 'Góp vốn quỹ'; type = 'deposit'; }
+        else if (ft.type === 'revenue_withdrawal') { title = 'Rút doanh thu'; type = 'withdraw'; }
+        else if (ft.type === 'import_payment') { title = 'Thanh toán phiếu nhập'; type = 'payment'; }
+        else if (ft.type === 'seeding_payment') { title = 'Chi phí Seeding'; type = 'payment'; }
+        else if (ft.type === 'shipping_payment') { title = 'Phí giao hàng'; type = 'payment'; }
+        else if (ft.type === 'system_adjustment') { title = 'Đồng bộ hệ thống'; type = 'fund'; }
+        
+        recentActivities.push({
+          type: type,
+          title: title,
+          subtitle: `Do ${ft.created_by || 'Admin'} thực hiện`,
+          detail: `${ft.fund_change >= 0 ? '+' : ''}${(ft.fund_change || 0).toLocaleString('vi-VN')} ₫`,
+          time: ft.createdAt
+        });
+      });
+    }
     
     recentActivities.sort((a, b) => {
       const timeA = new Date(a.time || 0).getTime();

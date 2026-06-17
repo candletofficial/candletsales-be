@@ -15,6 +15,7 @@ const importTicketSchema = new mongoose.Schema({
     default: 'Admin'
   },
   status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
+  payment_status: { type: String, enum: ['unsettled', 'settled'], default: 'unsettled' },
   note: { type: String, default: '' },
   completed_at: { type: Date }
 }, { timestamps: true });

@@ -1,4 +1,88 @@
 const AdCost = require('../models/AdCost');
+const FundTransaction = require('../models/FundTransaction');
+
+const PLATFORMS = ['facebook', 'tiktok', 'shopee', 'google', 'instagram', 'youtube'];
+
+// GET /api/ad-costs/balances
+exports.getBalances = async (req, res, next) => {
+  try {
+    // Tổng tiền đã nạp cho mỗi nền tảng
+    const topupAgg = await FundTransaction.aggregate([
+      { $match: { type: 'ad_topup' } },
+      { $group: { _id: '$source', totalTopup: { $sum: '$amount' } } } // 'amount' in ad_topup is the amount entering the ad platform
+    ]);
+
+    // Tổng tiền đã chi cho mỗi nền tảng
+    const costAgg = await AdCost.aggregate([
+      { $group: { _id: '$platform', totalSpent: { $sum: '$base_amount' } } } // using base_amount per user requirement
+    ]);
+
+    const topupMap = {};
+    topupAgg.forEach(item => { if (item._id) topupMap[item._id] = item.totalTopup; });
+
+    const costMap = {};
+    costAgg.forEach(item => { if (item._id) costMap[item._id] = item.totalSpent; });
+
+    const balances = PLATFORMS.map(platform => {
+      const totalTopup = topupMap[platform] || 0;
+      const totalSpent = costMap[platform] || 0;
+      return {
+        platform,
+        totalTopup,
+        totalSpent,
+        balance: totalTopup - totalSpent
+      };
+    });
+
+    res.status(200).json({ success: true, data: balances });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/ad-costs/topup
+exports.topupPlatform = async (req, res, next) => {
+  try {
+    const { platform, amount, fee, note, created_by } = req.body;
+
+    if (!PLATFORMS.includes(platform)) {
+      return res.status(400).json({ success: false, message: 'Nền tảng không hợp lệ' });
+    }
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Số tiền nạp không hợp lệ' });
+    }
+
+    const numFee = fee ? Number(fee) : 0;
+    const totalDeduction = Number(amount) + numFee;
+
+    // Check Fund balance
+    const fundAgg = await FundTransaction.aggregate([
+      { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+    ]);
+    const totalFundBalance = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+
+    if (totalFundBalance < totalDeduction) {
+      return res.status(400).json({ success: false, message: 'Tài sản chung không đủ để nạp tiền quảng cáo' });
+    }
+
+    const transaction = new FundTransaction({
+      type: 'ad_topup',
+      amount: Number(amount), // Amount entering ad account
+      fee: numFee, // VAT
+      fund_change: -totalDeduction, // Deduct from Fund
+      source: platform,
+      note: note || `Nạp tiền quảng cáo ${platform}`,
+      created_by: created_by || 'Admin'
+    });
+
+    await transaction.save();
+
+    res.status(200).json({ success: true, message: 'Nạp tiền thành công', data: transaction });
+  } catch (error) {
+    next(error);
+  }
+};
 
 // GET /api/ad-costs?year=2025&month=5
 // Trả về tất cả bản ghi trong tháng
@@ -26,6 +110,25 @@ exports.getAdCosts = async (req, res, next) => {
 exports.createAdCost = async (req, res, next) => {
   try {
     const { date, platform, base_amount, vat, amount, note } = req.body;
+
+    // Kiểm tra số dư quảng cáo
+    const topupAgg = await FundTransaction.aggregate([
+      { $match: { type: 'ad_topup', source: platform } },
+      { $group: { _id: null, totalTopup: { $sum: '$amount' } } }
+    ]);
+    const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
+
+    const costAgg = await AdCost.aggregate([
+      { $match: { platform } },
+      { $group: { _id: null, totalSpent: { $sum: '$base_amount' } } }
+    ]);
+    const totalSpent = costAgg.length > 0 ? costAgg[0].totalSpent : 0;
+
+    const currentBalance = totalTopup - totalSpent;
+    if (currentBalance < Number(base_amount)) {
+      return res.status(400).json({ success: false, message: `Số dư tài khoản quảng cáo ${platform} không đủ (Hiện còn: ${currentBalance.toLocaleString('vi-VN')} đ)` });
+    }
+
     const record = await AdCost.create({ date, platform, base_amount, vat, amount, note: note || '' });
     res.status(201).json({ success: true, data: record, message: 'Đã thêm chi phí quảng cáo' });
   } catch (error) {
@@ -37,6 +140,33 @@ exports.createAdCost = async (req, res, next) => {
 exports.updateAdCost = async (req, res, next) => {
   try {
     const { date, platform, base_amount, vat, amount, note } = req.body;
+    
+    // Find old record to know old base_amount
+    const oldRecord = await AdCost.findById(req.params.id);
+    if (!oldRecord) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy bản ghi' });
+    }
+
+    // Kiểm tra số dư quảng cáo nếu platform hoặc base_amount đổi
+    const topupAgg = await FundTransaction.aggregate([
+      { $match: { type: 'ad_topup', source: platform } },
+      { $group: { _id: null, totalTopup: { $sum: '$amount' } } }
+    ]);
+    const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
+
+    const costAgg = await AdCost.aggregate([
+      { $match: { platform } },
+      { $group: { _id: null, totalSpent: { $sum: '$base_amount' } } }
+    ]);
+    const totalSpent = costAgg.length > 0 ? costAgg[0].totalSpent : 0;
+
+    // The available balance assuming the old record is reverted
+    const availableBalance = (totalTopup - totalSpent) + (oldRecord.platform === platform ? oldRecord.base_amount : 0);
+    
+    if (availableBalance < Number(base_amount)) {
+      return res.status(400).json({ success: false, message: `Số dư tài khoản quảng cáo ${platform} không đủ (Khả dụng: ${availableBalance.toLocaleString('vi-VN')} đ)` });
+    }
+
     const record = await AdCost.findByIdAndUpdate(
       req.params.id,
       { date, platform, base_amount, vat, amount, note },

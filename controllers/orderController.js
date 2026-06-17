@@ -3,6 +3,7 @@ const Material = require('../models/Material');
 const Product = require('../models/Product');
 const ShippingConfig = require('../models/ShippingConfig');
 const SystemConfig = require('../models/SystemConfig');
+const FundTransaction = require('../models/FundTransaction');
 const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 
 // Helper tạo orderId ngẫu nhiên
@@ -134,6 +135,26 @@ exports.createOrder = async (req, res, next) => {
       }
     }
 
+    // Tính tổng số tiền cần thanh toán ngay: phí seeding + phí ship
+    const seedingPayment = is_seeding && seeding_cost ? Number(seeding_cost) : 0;
+    const shippingPayment = logistics_cost ? Number(logistics_cost) : 0;
+    const totalRequired = seedingPayment + shippingPayment;
+
+    if (totalRequired > 0) {
+      const fundAgg = await FundTransaction.aggregate([
+        { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+      ]);
+      const currentFund = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+      if (currentFund < totalRequired) {
+        return res.status(400).json({ 
+          success: false, 
+          code: 'INSUFFICIENT_FUND', 
+          message: 'Tài sản chung không đủ để trả chi phí (Ship / Seeding).',
+          requiredAmount: totalRequired - currentFund
+        });
+      }
+    }
+
     // 2. Tạo đơn hàng
     const order = await Order.create({
       orderId,
@@ -151,6 +172,30 @@ exports.createOrder = async (req, res, next) => {
       seeding_cost: seeding_cost || 0,
       ordered_at: ordered_at || new Date(),
     });
+
+    // Tạo giao dịch trả phí seeding
+    if (order.is_seeding && order.seeding_cost > 0) {
+      await FundTransaction.create({
+        type: 'seeding_payment',
+        amount: order.seeding_cost,
+        fund_change: -order.seeding_cost,
+        order_id: order._id,
+        note: `Chi phí đơn Seeding ${order.orderId}`,
+        created_by: 'System'
+      });
+    }
+
+    // Tạo giao dịch trả phí ship
+    if (order.logistics_cost > 0) {
+      await FundTransaction.create({
+        type: 'shipping_payment',
+        amount: order.logistics_cost,
+        fund_change: -order.logistics_cost,
+        order_id: order._id,
+        note: `Phí ship đơn hàng ${order.orderId}`,
+        created_by: 'System'
+      });
+    }
 
     // Cập nhật used_count của Coupon nếu có dùng mã giảm giá
     if (discount_code && discount_amount > 0) {
@@ -213,6 +258,31 @@ exports.updateOrder = async (req, res, next) => {
     // Không cho phép chỉnh sửa đơn hàng đã bị hoàn
     if (oldOrder.status === 'returned') {
       return res.status(400).json({ success: false, message: 'Không thể chỉnh sửa đơn hàng đã bị hoàn' });
+    }
+
+    const newSeedingCost = Number(seeding_cost || 0);
+    const oldSeedingCost = Number(oldOrder.seeding_cost || 0);
+    const newShippingCost = Number(logistics_cost || 0);
+    const oldShippingCost = Number(oldOrder.logistics_cost || 0);
+
+    const oldTotalDeduction = (oldOrder.is_seeding ? oldSeedingCost : 0) + oldShippingCost;
+    const newTotalDeduction = (is_seeding ? newSeedingCost : 0) + newShippingCost;
+    const delta = newTotalDeduction - oldTotalDeduction;
+
+    // Kiểm tra số dư nếu tổng phí tăng lên
+    if (delta > 0) {
+      const fundAgg = await FundTransaction.aggregate([
+        { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+      ]);
+      const currentFund = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+      if (currentFund < delta) {
+        return res.status(400).json({ 
+          success: false, 
+          code: 'INSUFFICIENT_FUND', 
+          message: 'Tài sản chung không đủ để trả thêm chi phí (Ship / Seeding).',
+          requiredAmount: delta - currentFund
+        });
+      }
     }
 
     // 1. Tính toán lượng nguyên liệu cũ và mới
@@ -280,9 +350,56 @@ exports.updateOrder = async (req, res, next) => {
     // 5. Cập nhật dữ liệu đơn hàng
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { items: items || [], total_price: total_price || 0, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, is_seeding: is_seeding || false, seeding_cost: seeding_cost || 0, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
+      { items: items || [], total_price: total_price || 0, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, is_seeding: is_seeding || false, seeding_cost: newSeedingCost, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
       { new: true, runValidators: true }
     );
+
+    // Xử lý FundTransaction cho seeding_payment
+    if (order.is_seeding) {
+      const existingTx = await FundTransaction.findOne({ order_id: order._id, type: 'seeding_payment' });
+      if (newSeedingCost > 0) {
+        if (existingTx) {
+          existingTx.amount = newSeedingCost;
+          existingTx.fund_change = -newSeedingCost;
+          await existingTx.save();
+        } else {
+          await FundTransaction.create({
+            type: 'seeding_payment',
+            amount: newSeedingCost,
+            fund_change: -newSeedingCost,
+            order_id: order._id,
+            note: `Chi phí đơn Seeding ${order.orderId}`,
+            created_by: 'System'
+          });
+        }
+      } else if (existingTx) {
+        await existingTx.deleteOne(); // Xóa nếu phí về 0
+      }
+    } else {
+      // Nếu không còn là đơn seeding, xóa seeding_payment nếu có
+      await FundTransaction.deleteMany({ order_id: order._id, type: 'seeding_payment' });
+    }
+
+    // Xử lý FundTransaction cho shipping_payment
+    const existingShipTx = await FundTransaction.findOne({ order_id: order._id, type: 'shipping_payment' });
+    if (newShippingCost > 0) {
+      if (existingShipTx) {
+        existingShipTx.amount = newShippingCost;
+        existingShipTx.fund_change = -newShippingCost;
+        await existingShipTx.save();
+      } else {
+        await FundTransaction.create({
+          type: 'shipping_payment',
+          amount: newShippingCost,
+          fund_change: -newShippingCost,
+          order_id: order._id,
+          note: `Phí ship đơn hàng ${order.orderId}`,
+          created_by: 'System'
+        });
+      }
+    } else if (existingShipTx) {
+      await existingShipTx.deleteOne(); // Xóa nếu phí ship về 0
+    }
 
     // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
     triggerAutoConfirmImports().catch(console.error);
@@ -300,6 +417,16 @@ exports.deleteOrder = async (req, res, next) => {
     const order = await Order.findByIdAndDelete(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+    }
+
+    // Hoàn lại tiền vào Tài sản chung nếu là đơn seeding
+    if (order.is_seeding) {
+      await FundTransaction.deleteMany({ order_id: order._id, type: 'seeding_payment' });
+    }
+    
+    // Hoàn lại phí ship vào Tài sản chung
+    if (order.logistics_cost > 0) {
+      await FundTransaction.deleteMany({ order_id: order._id, type: 'shipping_payment' });
     }
 
     // Chỉ hoàn kho khi đơn CHƯA bị hoàn (completed).

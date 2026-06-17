@@ -22,12 +22,6 @@ const orderSchema = new mongoose.Schema({
   items: {
     type: [orderItemSchema],
     default: [],
-    validate: [
-      function (arr) {
-        return this.is_seeding || arr.length > 0;
-      },
-      'Đơn hàng bình thường phải có ít nhất 1 sản phẩm',
-    ],
   },
   total_price: { type: Number, required: true, min: 0 }, // admin có thể chỉnh tay
   logistics_cost: { type: Number, default: 0 },

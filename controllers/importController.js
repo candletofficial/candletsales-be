@@ -1,6 +1,7 @@
 const ImportTicket = require('../models/ImportTicket');
 const Material = require('../models/Material');
 const SystemConfig = require('../models/SystemConfig');
+const FundTransaction = require('../models/FundTransaction');
 
 // Lấy danh sách phiếu nhập
 exports.getImportTickets = async (req, res) => {
@@ -164,5 +165,56 @@ exports.deleteImportTicket = async (req, res) => {
     res.json({ success: true, message: 'Đã xóa phiếu nhập' });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Lỗi khi xóa phiếu nhập' });
+  }
+};
+
+// Tất toán phiếu nhập
+exports.settleImportTicket = async (req, res) => {
+  try {
+    const ticket = await ImportTicket.findById(req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập' });
+    }
+    if (ticket.payment_status === 'settled') {
+      return res.status(400).json({ success: false, message: 'Phiếu nhập này đã được tất toán' });
+    }
+
+    if (ticket.imported_by && req.user && ticket.imported_by !== req.user.name && ticket.imported_by !== 'Admin') {
+      return res.status(403).json({ success: false, message: 'Chỉ người tạo phiếu mới có quyền tất toán phiếu nhập này' });
+    }
+
+    // 1. Lấy số dư quỹ hiện tại
+    const fundAgg = await FundTransaction.aggregate([
+      { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+    ]);
+    const totalFundBalance = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+
+    if (totalFundBalance < ticket.total_amount) {
+      return res.status(400).json({ 
+        success: false, 
+        code: 'INSUFFICIENT_FUND',
+        message: 'Tài sản chung không đủ tiền để tất toán phiếu nhập này. Vui lòng góp vốn hoặc rút từ doanh thu.',
+        requiredAmount: ticket.total_amount - totalFundBalance
+      });
+    }
+
+    // 2. Tạo giao dịch trừ tiền quỹ
+    const transaction = new FundTransaction({
+      type: 'import_payment',
+      amount: ticket.total_amount,
+      fund_change: -ticket.total_amount,
+      import_ticket_id: ticket._id,
+      note: `Tất toán phiếu nhập ${ticket.code || '#' + ticket._id.toString().slice(-6)}`,
+      created_by: 'Admin'
+    });
+    await transaction.save();
+
+    // 3. Cập nhật trạng thái phiếu nhập
+    ticket.payment_status = 'settled';
+    await ticket.save();
+
+    res.json({ success: true, data: ticket, message: 'Đã tất toán phiếu nhập thành công' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Lỗi khi tất toán phiếu nhập' });
   }
 };
