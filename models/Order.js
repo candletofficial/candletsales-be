@@ -27,8 +27,21 @@ const orderSchema = new mongoose.Schema({
   logistics_cost: { type: Number, default: 0 },
   source: { 
     type: String, 
-    enum: ['shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'], 
+    enum: ['pos', 'shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'], 
     default: 'khác' 
+  },
+  pos_mode: {
+    type: String,
+    enum: ['online', 'offline'],
+    default: 'offline'
+  },
+  customer_name: { type: String, default: '' },
+  customer_phone: { type: String, default: '' },
+  customer_address: { type: String, default: '' },
+  payment_method: {
+    type: String,
+    enum: ['cash', 'transfer'],
+    default: 'cash'
   },
   shippingMethod: {
     type: String,

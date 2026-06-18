@@ -16,6 +16,7 @@ const systemConfigRoutes = require('./routes/systemConfigRoutes');
 const couponRoutes = require('./routes/couponRoutes');
 const fundRoutes = require('./routes/fundRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 const app = express();
 
 // ── Middlewares ──────────────────────────────────────────────────
@@ -41,6 +42,7 @@ app.use('/api/system-configs', systemConfigRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/funds', fundRoutes);
 app.use('/api/expenses', expenseRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

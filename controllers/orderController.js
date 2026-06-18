@@ -102,7 +102,7 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
+    const { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
 
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -162,6 +162,11 @@ exports.createOrder = async (req, res, next) => {
       total_price: total_price || 0,
       logistics_cost: logistics_cost || 0,
       source: source || 'khác',
+      pos_mode: pos_mode || 'offline',
+      customer_name: customer_name || '',
+      customer_phone: customer_phone || '',
+      customer_address: customer_address || '',
+      payment_method: payment_method || 'cash',
       shippingMethod: shippingMethod || 'standard',
       packaging_cost: packagingCost,
       note: note || '',
@@ -193,6 +198,20 @@ exports.createOrder = async (req, res, next) => {
         fund_change: -order.logistics_cost,
         order_id: order._id,
         note: `Phí ship đơn hàng ${order.orderId}`,
+        created_by: 'System'
+      });
+    }
+
+    // Tự động chuyển doanh thu POS (Chuyển khoản) vào Tài sản chung
+    if (order.source === 'pos' && order.payment_method === 'transfer' && order.total_price > 0) {
+      await FundTransaction.create({
+        type: 'revenue_withdrawal',
+        amount: order.total_price,
+        fee: 0,
+        fund_change: order.total_price,
+        source: 'pos',
+        order_id: order._id,
+        note: `POS Chuyển khoản đơn ${order.orderId}`,
         created_by: 'System'
       });
     }
@@ -244,7 +263,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, shippingMethod, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
+    const { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
 
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -350,7 +369,7 @@ exports.updateOrder = async (req, res, next) => {
     // 5. Cập nhật dữ liệu đơn hàng
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { items: items || [], total_price: total_price || 0, logistics_cost, source, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, is_seeding: is_seeding || false, seeding_cost: newSeedingCost, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
+      { items: items || [], total_price: total_price || 0, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, packaging_cost: packagingCost, note, is_replacement: is_replacement || false, is_seeding: is_seeding || false, seeding_cost: newSeedingCost, ordered_at, discount_amount: discount_amount || 0, discount_code: discount_code || null },
       { new: true, runValidators: true }
     );
 
@@ -401,6 +420,29 @@ exports.updateOrder = async (req, res, next) => {
       await existingShipTx.deleteOne(); // Xóa nếu phí ship về 0
     }
 
+    // Xử lý FundTransaction cho POS Chuyển khoản
+    const existingPosTx = await FundTransaction.findOne({ order_id: order._id, type: 'revenue_withdrawal', source: 'pos' });
+    if (order.source === 'pos' && order.payment_method === 'transfer' && order.total_price > 0) {
+      if (existingPosTx) {
+        existingPosTx.amount = order.total_price;
+        existingPosTx.fund_change = order.total_price;
+        await existingPosTx.save();
+      } else {
+        await FundTransaction.create({
+          type: 'revenue_withdrawal',
+          amount: order.total_price,
+          fee: 0,
+          fund_change: order.total_price,
+          source: 'pos',
+          order_id: order._id,
+          note: `POS Chuyển khoản đơn ${order.orderId}`,
+          created_by: 'System'
+        });
+      }
+    } else if (existingPosTx) {
+      await existingPosTx.deleteOne();
+    }
+
     // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
     triggerAutoConfirmImports().catch(console.error);
 
@@ -428,6 +470,9 @@ exports.deleteOrder = async (req, res, next) => {
     if (order.logistics_cost > 0) {
       await FundTransaction.deleteMany({ order_id: order._id, type: 'shipping_payment' });
     }
+
+    // Xóa giao dịch rút POS Chuyển khoản nếu có
+    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: 'pos' });
 
     // Chỉ hoàn kho khi đơn CHƯA bị hoàn (completed).
     // Đơn đã hoàn (returned) thì nguyên liệu đã được trả lại khi markAsReturned → không hoàn thêm.
@@ -517,6 +562,9 @@ exports.markAsReturned = async (req, res, next) => {
     } catch (refundErr) {
       console.error('[markAsReturned] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
     }
+
+    // Xóa giao dịch rút POS Chuyển khoản nếu có (vì đơn đã bị hoàn)
+    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: 'pos' });
 
     // Cập nhật trạng thái đơn hàng
     const updatedOrder = await Order.findByIdAndUpdate(

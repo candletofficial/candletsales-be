@@ -8,10 +8,16 @@
     "dev": "nodemon server.js",
     "seed:admin": "node scripts/seedAdmin.js"
   },
-  "keywords": ["candle", "ecommerce", "mern"],
+  "keywords": [
+    "candle",
+    "ecommerce",
+    "mern"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/genai": "^2.8.0",
+    "@google/generative-ai": "^0.24.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

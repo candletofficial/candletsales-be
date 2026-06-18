@@ -2,7 +2,7 @@ const FundTransaction = require('../models/FundTransaction');
 const Order = require('../models/Order');
 const mongoose = require('mongoose');
 
-const PLATFORMS = ['shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'];
+const PLATFORMS = ['pos', 'shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'];
 
 exports.getSummary = async (req, res) => {
   try {
@@ -52,14 +52,26 @@ exports.getSummary = async (req, res) => {
     });
 
     const adminDepositsAgg = await FundTransaction.aggregate([
-      { $match: { type: 'admin_deposit' } },
-      { $group: { _id: '$created_by', totalDeposit: { $sum: '$amount' } } },
-      { $sort: { totalDeposit: -1 } }
+      { $match: { type: { $in: ['admin_deposit', 'admin_withdrawal'] } } },
+      { $group: { 
+          _id: '$created_by', 
+          totalDeposit: { 
+            $sum: { $cond: [{ $eq: ['$type', 'admin_deposit'] }, '$amount', 0] } 
+          },
+          totalWithdrawal: { 
+            $sum: { $cond: [{ $eq: ['$type', 'admin_withdrawal'] }, '$amount', 0] } 
+          },
+          netDeposit: { $sum: '$fund_change' }
+        } 
+      },
+      { $sort: { netDeposit: -1 } }
     ]);
 
     const adminDeposits = adminDepositsAgg.map(item => ({
       admin: item._id || 'Unknown',
-      totalDeposit: item.totalDeposit
+      totalDeposit: item.totalDeposit,
+      totalWithdrawal: item.totalWithdrawal,
+      netDeposit: item.netDeposit
     }));
 
     res.json({
@@ -136,6 +148,40 @@ exports.deposit = async (req, res) => {
   } catch (error) {
     console.error('Error in deposit:', error);
     res.status(500).json({ success: false, message: 'Lỗi khi góp vốn' });
+  }
+};
+
+exports.withdrawCapital = async (req, res) => {
+  try {
+    const { amount, note, created_by } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Số tiền rút không hợp lệ' });
+    }
+
+    const fundAgg = await FundTransaction.aggregate([
+      { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+    ]);
+    const totalFundBalance = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+
+    if (amount > totalFundBalance) {
+      return res.status(400).json({ success: false, message: 'Số tiền rút vượt quá tài sản chung' });
+    }
+
+    const transaction = new FundTransaction({
+      type: 'admin_withdrawal',
+      amount,
+      fund_change: -amount,
+      note,
+      created_by: created_by || 'Admin'
+    });
+
+    await transaction.save();
+
+    res.json({ success: true, message: 'Rút vốn thành công', data: transaction });
+  } catch (error) {
+    console.error('Error in withdrawCapital:', error);
+    res.status(500).json({ success: false, message: 'Lỗi khi rút vốn' });
   }
 };
 
