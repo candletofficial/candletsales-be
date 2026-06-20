@@ -43,7 +43,7 @@ exports.getBalances = async (req, res, next) => {
 // POST /api/ad-costs/topup
 exports.topupPlatform = async (req, res, next) => {
   try {
-    const { platform, amount, fee, note, created_by } = req.body;
+    const { platform, amount, fee, note, created_by, fundingSource = 'common' } = req.body;
 
     if (!PLATFORMS.includes(platform)) {
       return res.status(400).json({ success: false, message: 'Nền tảng không hợp lệ' });
@@ -53,8 +53,58 @@ exports.topupPlatform = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Số tiền nạp không hợp lệ' });
     }
 
+    if (fundingSource === 'platform' && (platform === 'facebook' || platform === 'instagram')) {
+      return res.status(400).json({ success: false, message: 'Facebook và Instagram chỉ có thể nạp từ tài sản chung' });
+    }
+
     const numFee = fee ? Number(fee) : 0;
     const totalDeduction = Number(amount) + numFee;
+
+    if (fundingSource === 'platform') {
+      const Order = require('../models/Order');
+      const orderRevenueAgg = await Order.aggregate([
+        { $match: { status: { $ne: 'returned' }, source: platform } },
+        { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
+      ]);
+      const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;
+  
+      const withdrawnAgg = await FundTransaction.aggregate([
+        { $match: { type: 'revenue_withdrawal', source: platform } },
+        { $group: { _id: null, totalWithdrawn: { $sum: '$amount' } } }
+      ]);
+      const totalWithdrawn = withdrawnAgg.length > 0 ? withdrawnAgg[0].totalWithdrawn : 0;
+  
+      const availableBalance = totalRevenue - totalWithdrawn;
+  
+      if (totalDeduction > availableBalance) {
+        return res.status(400).json({ success: false, message: `Số dư khả dụng trên ${platform} không đủ để nạp` });
+      }
+      
+      // Rút tiền từ nền tảng (không cộng vào tài sản chung -> fund_change = 0)
+      await FundTransaction.create({
+        type: 'revenue_withdrawal',
+        amount: totalDeduction,
+        fee: 0,
+        fund_change: 0,
+        source: platform,
+        note: `Rút tiền từ ${platform} để nạp quảng cáo`,
+        created_by: created_by || 'Admin'
+      });
+      
+      // Nạp tiền quảng cáo
+      const transaction = new FundTransaction({
+        type: 'ad_topup',
+        amount: Number(amount),
+        fee: numFee,
+        fund_change: 0,
+        source: platform,
+        note: note || `Nạp tiền quảng cáo ${platform} từ tài sản riêng`,
+        created_by: created_by || 'Admin'
+      });
+      
+      await transaction.save();
+      return res.status(200).json({ success: true, message: 'Nạp tiền thành công', data: transaction });
+    }
 
     // Check Fund balance
     const fundAgg = await FundTransaction.aggregate([

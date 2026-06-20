@@ -202,16 +202,18 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    // Tự động chuyển doanh thu POS (Chuyển khoản) vào Tài sản chung
-    if (order.source === 'pos' && order.payment_method === 'transfer' && order.total_price > 0) {
+    // Tự động chuyển doanh thu POS (Chuyển khoản), Facebook, Instagram vào Tài sản chung
+    const isAutoFund = (order.source === 'pos' && order.payment_method === 'transfer') || order.source === 'facebook' || order.source === 'instagram';
+    if (isAutoFund && order.total_price > 0) {
+      const sourceName = order.source === 'pos' ? 'POS Chuyển khoản' : (order.source === 'facebook' ? 'Facebook' : 'Instagram');
       await FundTransaction.create({
         type: 'revenue_withdrawal',
         amount: order.total_price,
         fee: 0,
         fund_change: order.total_price,
-        source: 'pos',
+        source: order.source,
         order_id: order._id,
-        note: `POS Chuyển khoản đơn ${order.orderId}`,
+        note: `Tự động chuyển doanh thu ${sourceName} đơn ${order.orderId}`,
         created_by: 'System'
       });
     }
@@ -420,27 +422,42 @@ exports.updateOrder = async (req, res, next) => {
       await existingShipTx.deleteOne(); // Xóa nếu phí ship về 0
     }
 
-    // Xử lý FundTransaction cho POS Chuyển khoản
-    const existingPosTx = await FundTransaction.findOne({ order_id: order._id, type: 'revenue_withdrawal', source: 'pos' });
-    if (order.source === 'pos' && order.payment_method === 'transfer' && order.total_price > 0) {
-      if (existingPosTx) {
-        existingPosTx.amount = order.total_price;
-        existingPosTx.fund_change = order.total_price;
-        await existingPosTx.save();
+    // Xử lý FundTransaction tự động chuyển doanh thu (POS Chuyển khoản, Facebook, Instagram)
+    const isAutoFund = (order.source === 'pos' && order.payment_method === 'transfer') || order.source === 'facebook' || order.source === 'instagram';
+    const autoFundSources = ['pos', 'facebook', 'instagram'];
+    const existingAutoTxList = await FundTransaction.find({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: autoFundSources } });
+    
+    if (isAutoFund && order.total_price > 0) {
+      const sourceName = order.source === 'pos' ? 'POS Chuyển khoản' : (order.source === 'facebook' ? 'Facebook' : 'Instagram');
+      
+      if (existingAutoTxList.length > 0) {
+        const txToUpdate = existingAutoTxList[0];
+        txToUpdate.amount = order.total_price;
+        txToUpdate.fund_change = order.total_price;
+        txToUpdate.source = order.source;
+        txToUpdate.note = `Tự động chuyển doanh thu ${sourceName} đơn ${order.orderId}`;
+        await txToUpdate.save();
+        
+        // Xoá các tx thừa nếu có (do lỗi cũ)
+        for (let i = 1; i < existingAutoTxList.length; i++) {
+          await existingAutoTxList[i].deleteOne();
+        }
       } else {
         await FundTransaction.create({
           type: 'revenue_withdrawal',
           amount: order.total_price,
           fee: 0,
           fund_change: order.total_price,
-          source: 'pos',
+          source: order.source,
           order_id: order._id,
-          note: `POS Chuyển khoản đơn ${order.orderId}`,
+          note: `Tự động chuyển doanh thu ${sourceName} đơn ${order.orderId}`,
           created_by: 'System'
         });
       }
-    } else if (existingPosTx) {
-      await existingPosTx.deleteOne();
+    } else {
+      for (const tx of existingAutoTxList) {
+        await tx.deleteOne();
+      }
     }
 
     // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
@@ -471,8 +488,8 @@ exports.deleteOrder = async (req, res, next) => {
       await FundTransaction.deleteMany({ order_id: order._id, type: 'shipping_payment' });
     }
 
-    // Xóa giao dịch rút POS Chuyển khoản nếu có
-    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: 'pos' });
+    // Xóa giao dịch tự động chuyển doanh thu nếu có
+    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } });
 
     // Chỉ hoàn kho khi đơn CHƯA bị hoàn (completed).
     // Đơn đã hoàn (returned) thì nguyên liệu đã được trả lại khi markAsReturned → không hoàn thêm.
@@ -568,8 +585,8 @@ exports.markAsReturned = async (req, res, next) => {
       console.error('[markAsReturned] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
     }
 
-    // Xóa giao dịch rút POS Chuyển khoản nếu có (vì đơn đã bị hoàn)
-    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: 'pos' });
+    // Xóa giao dịch tự động chuyển doanh thu nếu có (vì đơn đã bị hoàn)
+    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } });
 
     // Cập nhật trạng thái đơn hàng
     const updatedOrder = await Order.findByIdAndUpdate(
