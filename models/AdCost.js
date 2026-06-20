@@ -5,7 +5,7 @@ const adCostSchema = new mongoose.Schema({
   platform: {
     type: String,
     required: true,
-    enum: ['facebook', 'tiktok', 'shopee', 'google', 'instagram', 'youtube'],
+    enum: ['facebook', 'tiktok', 'shopee', 'website', 'instagram', 'youtube'],
   },
   base_amount: { type: Number, min: 0 },
   vat: { type: Number, default: 0, min: 0 },

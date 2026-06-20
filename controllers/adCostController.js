@@ -1,7 +1,7 @@
 const AdCost = require('../models/AdCost');
 const FundTransaction = require('../models/FundTransaction');
 
-const PLATFORMS = ['facebook', 'tiktok', 'shopee', 'google', 'instagram', 'youtube'];
+const PLATFORMS = ['facebook', 'tiktok', 'shopee', 'website', 'instagram', 'youtube'];
 
 // GET /api/ad-costs/balances
 exports.getBalances = async (req, res, next) => {

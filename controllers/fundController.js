@@ -2,7 +2,7 @@ const FundTransaction = require('../models/FundTransaction');
 const Order = require('../models/Order');
 const mongoose = require('mongoose');
 
-const PLATFORMS = ['pos', 'shopee', 'tiktok', 'youtube', 'google', 'khác'];
+const PLATFORMS = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
 
 exports.getSummary = async (req, res) => {
   try {

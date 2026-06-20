@@ -19,7 +19,7 @@ mongoose.connect('mongodb://localhost:27017/candletsales').then(async () => {
   const withMap = {}; withdrawnAgg.forEach(i => withMap[i._id] = i.totalWithdrawn);
   
   let shopeeAvail = 0;
-  const platforms = ['shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'google', 'khác'];
+  const platforms = ['shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'website', 'khác'];
   platforms.forEach(p => {
     const rev = revMap[p] || 0;
     const withD = withMap[p] || 0;
