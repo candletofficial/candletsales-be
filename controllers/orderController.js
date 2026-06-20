@@ -527,16 +527,21 @@ exports.markAsReturned = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Đơn hàng này đã được đánh dấu bị hoàn trước đó' });
     }
 
-    // Đọc chi phí hoàn từ cấu hình hệ thống
-    const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' });
-    let returnCosts = {};
-    if (returnCostConfig && returnCostConfig.value) {
-      try {
-        returnCosts = JSON.parse(returnCostConfig.value);
-      } catch (e) {}
+    // Đọc chi phí hoàn từ body hoặc cấu hình hệ thống
+    let returnCost = 0;
+    if (req.body && req.body.returnCost !== undefined && req.body.returnCost !== null) {
+      returnCost = Number(req.body.returnCost);
+    } else {
+      const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' });
+      let returnCosts = {};
+      if (returnCostConfig && returnCostConfig.value) {
+        try {
+          returnCosts = JSON.parse(returnCostConfig.value);
+        } catch (e) {}
+      }
+      const orderSource = order.source || 'khác';
+      returnCost = returnCosts[orderSource] ? Number(returnCosts[orderSource]) : 0;
     }
-    const orderSource = order.source || 'khác';
-    const returnCost = returnCosts[orderSource] ? Number(returnCosts[orderSource]) : 0;
 
     // Hoàn lại nguyên liệu vào kho (chỉ hoàn sản phẩm, không hoàn bao bì vận chuyển vì đã hỏng/sử dụng)
     try {
