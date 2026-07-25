@@ -175,8 +175,15 @@ exports.createAdCost = async (req, res, next) => {
 
     // Kiểm tra số dư quảng cáo
     const topupAgg = await FundTransaction.aggregate([
-      { $match: { type: 'ad_topup', source: platform } },
-      { $group: { _id: null, totalTopup: { $sum: '$amount' } } }
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: platform } },
+      { $group: { 
+          _id: null, 
+          totalTopup: { 
+            $sum: { 
+              $cond: [{ $eq: ['$type', 'ad_topup'] }, '$amount', '$platform_change'] 
+            } 
+          } 
+      } }
     ]);
     const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
 
@@ -212,8 +219,15 @@ exports.updateAdCost = async (req, res, next) => {
 
     // Kiểm tra số dư quảng cáo nếu platform hoặc base_amount đổi
     const topupAgg = await FundTransaction.aggregate([
-      { $match: { type: 'ad_topup', source: platform } },
-      { $group: { _id: null, totalTopup: { $sum: '$amount' } } }
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: platform } },
+      { $group: { 
+          _id: null, 
+          totalTopup: { 
+            $sum: { 
+              $cond: [{ $eq: ['$type', 'ad_topup'] }, '$amount', '$platform_change'] 
+            } 
+          } 
+      } }
     ]);
     const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
 
