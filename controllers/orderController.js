@@ -599,6 +599,38 @@ exports.markAsReturned = async (req, res, next) => {
       { new: true }
     );
 
+    // Xử lý trừ phí hoàn vào tài sản (nếu có phí hoàn)
+    if (returnCost > 0) {
+      const orderSource = updatedOrder.source || 'khác';
+      const platformsWithFund = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
+
+      if (platformsWithFund.includes(orderSource)) {
+        // Trừ vào tài sản riêng của nền tảng (sử dụng revenue_withdrawal với fund_change = 0)
+        // Chấp nhận trừ âm nếu tài sản riêng không đủ
+        await FundTransaction.create({
+          type: 'revenue_withdrawal',
+          amount: returnCost,
+          fee: 0,
+          fund_change: 0,
+          source: orderSource,
+          order_id: updatedOrder._id,
+          note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản riêng)`,
+          created_by: 'System'
+        });
+      } else {
+        // Trừ vào tài sản chung đối với các nền tảng không giữ tiền (facebook, instagram, pos...)
+        await FundTransaction.create({
+          type: 'expense_payment',
+          amount: returnCost,
+          fee: 0,
+          fund_change: -returnCost,
+          order_id: updatedOrder._id,
+          note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản chung)`,
+          created_by: 'System'
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: updatedOrder,

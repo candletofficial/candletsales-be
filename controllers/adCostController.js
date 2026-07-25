@@ -1,4 +1,5 @@
 const AdCost = require('../models/AdCost');
+const AffiliateFee = require('../models/AffiliateFee');
 const FundTransaction = require('../models/FundTransaction');
 
 const PLATFORMS = ['facebook', 'tiktok', 'shopee', 'website', 'instagram', 'youtube'];
@@ -8,8 +9,19 @@ exports.getBalances = async (req, res, next) => {
   try {
     // Tổng tiền đã nạp cho mỗi nền tảng
     const topupAgg = await FundTransaction.aggregate([
-      { $match: { type: 'ad_topup' } },
-      { $group: { _id: '$source', totalTopup: { $sum: '$amount' } } } // 'amount' in ad_topup is the amount entering the ad platform
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] } } },
+      { $group: { 
+          _id: '$source', 
+          totalTopup: { 
+            $sum: { 
+              $cond: [
+                { $eq: ['$type', 'ad_topup'] }, 
+                '$amount', 
+                '$platform_change' 
+              ] 
+            } 
+          } 
+      } }
     ]);
 
     // Tổng tiền đã chi cho mỗi nền tảng
@@ -180,6 +192,7 @@ exports.createAdCost = async (req, res, next) => {
     }
 
     const record = await AdCost.create({ date, platform, base_amount, vat, amount, note: note || '' });
+
     res.status(201).json({ success: true, data: record, message: 'Đã thêm chi phí quảng cáo' });
   } catch (error) {
     next(error);
@@ -225,6 +238,7 @@ exports.updateAdCost = async (req, res, next) => {
     if (!record) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy bản ghi' });
     }
+
     res.status(200).json({ success: true, data: record, message: 'Đã cập nhật chi phí' });
   } catch (error) {
     next(error);
@@ -238,7 +252,122 @@ exports.deleteAdCost = async (req, res, next) => {
     if (!record) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy bản ghi' });
     }
-    res.status(200).json({ success: true, message: 'Đã xóa chi phí' });
+    res.status(500).json({ success: false, message: 'Lỗi khi xóa chi phí quảng cáo' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/ad-costs/sync
+exports.syncAdCost = async (req, res, next) => {
+  try {
+    const { platform, actualBalance } = req.body;
+    
+    if (!PLATFORMS.includes(platform)) {
+      return res.status(400).json({ success: false, message: 'Nền tảng không hợp lệ' });
+    }
+
+    if (actualBalance === undefined || actualBalance === null) {
+      return res.status(400).json({ success: false, message: 'Số tiền thực tế không hợp lệ' });
+    }
+
+    // Lấy tổng nạp + điều chỉnh hiện tại
+    const topupAgg = await FundTransaction.aggregate([
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: platform } },
+      { $group: { 
+          _id: null, 
+          totalTopup: { 
+            $sum: { 
+              $cond: [{ $eq: ['$type', 'ad_topup'] }, '$amount', '$platform_change'] 
+            } 
+          } 
+      } }
+    ]);
+    const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
+
+    // Lấy tổng chi
+    const costAgg = await AdCost.aggregate([
+      { $match: { platform: platform } },
+      { $group: { _id: null, totalSpent: { $sum: '$base_amount' } } }
+    ]);
+    const totalSpent = costAgg.length > 0 ? costAgg[0].totalSpent : 0;
+
+    const currentBalance = totalTopup - totalSpent;
+    const diff = Number(actualBalance) - currentBalance;
+
+    if (diff === 0) {
+      return res.status(400).json({ success: false, message: 'Số dư không có sự thay đổi' });
+    }
+
+    await FundTransaction.create({
+      type: 'ad_adjustment',
+      amount: Math.abs(diff),
+      fee: 0,
+      fund_change: 0,
+      platform_change: diff,
+      source: platform,
+      note: `Đồng bộ quỹ quảng cáo (${platform})`,
+      created_by: 'System'
+    });
+
+    res.status(200).json({ success: true, message: `Đồng bộ quỹ quảng cáo ${platform} thành công` });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/ad-costs/affiliate-fees
+exports.getAffiliateFees = async (req, res, next) => {
+  try {
+    const { year, month } = req.query;
+    if (!year || !month) return res.status(400).json({ success: false, message: 'Thiếu year, month' });
+    const records = await AffiliateFee.find({ year: Number(year), month: Number(month) });
+    res.status(200).json({ success: true, data: records });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/ad-costs/affiliate-fees
+exports.saveAffiliateFee = async (req, res, next) => {
+  try {
+    const { year, month, platform, amount } = req.body;
+    if (!year || !month || !platform) return res.status(400).json({ success: false, message: 'Thiếu thông tin bắt buộc' });
+    if (platform !== 'shopee' && platform !== 'tiktok') {
+      return res.status(400).json({ success: false, message: 'Chỉ hỗ trợ Shopee và TikTok' });
+    }
+
+    let record = await AffiliateFee.findOne({ year, month, platform });
+    if (record) {
+      record.amount = Number(amount || 0);
+      await record.save();
+    } else {
+      record = await AffiliateFee.create({ year, month, platform, amount: Number(amount || 0) });
+    }
+
+    // Update FundTransaction
+    const noteStr = `Phí Affiliate tháng ${month}/${year} từ ${platform}`;
+    if (Number(amount) > 0) {
+      const existingTx = await FundTransaction.findOne({ type: 'revenue_withdrawal', note: noteStr });
+      if (existingTx) {
+        existingTx.amount = Number(amount);
+        await existingTx.save();
+      } else {
+        await FundTransaction.create({
+          type: 'revenue_withdrawal',
+          amount: Number(amount),
+          fee: 0,
+          fund_change: 0,
+          source: platform,
+          note: noteStr,
+          created_by: 'System'
+        });
+      }
+    } else {
+      await FundTransaction.deleteMany({ type: 'revenue_withdrawal', note: noteStr });
+    }
+
+    res.status(200).json({ success: true, data: record, message: 'Đã lưu phí Affiliate' });
   } catch (error) {
     next(error);
   }

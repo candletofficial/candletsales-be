@@ -5,6 +5,7 @@ const AdCost = require('../models/AdCost');
 const ImportTicket = require('../models/ImportTicket');
 const InventoryCheck = require('../models/InventoryCheck');
 const FundTransaction = require('../models/FundTransaction');
+const AffiliateFee = require('../models/AffiliateFee');
 
 // @desc    Lấy danh sách tài khoản (có filter theo status)
 // @route   GET /api/admin/users
@@ -217,7 +218,8 @@ exports.getDashboardStats = async (req, res) => {
       recentOrders,
       recentImports,
       recentInventoryChecks,
-      recentFundTransactions
+      recentFundTransactions,
+      affiliateFees
     ] = await Promise.all([
       Order.find({ ordered_at: { $gte: startOfCurrentPeriod, $lte: endOfPeriod } }),
       Order.find({ ordered_at: { $gte: startOfPrevPeriod, $lte: endOfPrevPeriod } }),
@@ -227,7 +229,15 @@ exports.getDashboardStats = async (req, res) => {
       Order.find({}).sort({ ordered_at: -1 }).limit(15),
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
       InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
-      FundTransaction.find({}).sort({ createdAt: -1 }).limit(5)
+      FundTransaction.find({}).sort({ createdAt: -1 }).limit(5),
+      AffiliateFee.find({
+        $or: [
+          { year: startOfCurrentPeriod.getFullYear(), month: startOfCurrentPeriod.getMonth() + 1 },
+          { year: endOfPeriod.getFullYear(), month: endOfPeriod.getMonth() + 1 },
+          { year: startOfPrevPeriod.getFullYear(), month: startOfPrevPeriod.getMonth() + 1 },
+          { year: endOfPrevPeriod.getFullYear(), month: endOfPrevPeriod.getMonth() + 1 }
+        ]
+      })
     ]);
 
     // 1. Calculate main metrics
@@ -249,6 +259,21 @@ exports.getDashboardStats = async (req, res) => {
     const adCurrentTotal = adsCurrent.reduce((sum, a) => sum + a.amount, 0);
     const adPrevTotal = adsPrev.reduce((sum, a) => sum + a.amount, 0);
     const adCostGrowth = adPrevTotal === 0 ? null : ((adCurrentTotal - adPrevTotal) / adPrevTotal * 100);
+
+    // Prorate affiliate fees based on the number of days in the period
+    const prorateFactor = days / 30;
+    
+    // Calculate current period affiliate fee
+    const endMonth = endOfPeriod.getMonth() + 1;
+    const endYear = endOfPeriod.getFullYear();
+    const currentFees = affiliateFees.filter(f => f.month === endMonth && f.year === endYear);
+    const affiliateFeeCurrentTotal = currentFees.reduce((sum, a) => sum + (a.amount * prorateFactor), 0);
+
+    // Calculate previous period affiliate fee
+    const prevMonth = endOfPrevPeriod.getMonth() + 1;
+    const prevYear = endOfPrevPeriod.getFullYear();
+    const prevFees = affiliateFees.filter(f => f.month === prevMonth && f.year === prevYear);
+    const affiliateFeePrevTotal = prevFees.reduce((sum, a) => sum + (a.amount * prorateFactor), 0);
 
     const normalCompletedCurrent = completedCurrent.filter(o => !o.is_replacement && !o.is_seeding);
     const replacementCurrent = completedCurrent.filter(o => o.is_replacement);
@@ -284,8 +309,8 @@ exports.getDashboardStats = async (req, res) => {
     const currentReturnCosts = returnedCurrent.reduce((sum, o) => sum + (o.return_cost || 0), 0);
     const prevReturnCosts = returnedPrev.reduce((sum, o) => sum + (o.return_cost || 0), 0);
 
-    const realProfitCurrent = revCurrent - currentCOGS - adCurrentTotal - currentLogistics - currentReturnCosts - currentReplacementCost - currentSeedingCost;
-    const realProfitPrev = revPrev - prevCOGS - adPrevTotal - prevLogistics - prevReturnCosts - prevReplacementCost - prevSeedingCost;
+    const realProfitCurrent = revCurrent - currentCOGS - adCurrentTotal - currentLogistics - currentReturnCosts - currentReplacementCost - currentSeedingCost - affiliateFeeCurrentTotal;
+    const realProfitPrev = revPrev - prevCOGS - adPrevTotal - prevLogistics - prevReturnCosts - prevReplacementCost - prevSeedingCost - affiliateFeePrevTotal;
     const realProfitGrowth = realProfitPrev === 0 ? null : ((realProfitCurrent - realProfitPrev) / Math.abs(realProfitPrev) * 100);
 
     // 2. Chart data (X days)
@@ -315,7 +340,7 @@ exports.getDashboardStats = async (req, res) => {
       }
     });
 
-    // Accumulate Ad Costs
+    // Accumulate Ad Costs (and leave affiliate fee for overall total, not daily charts since it's monthly)
     adsCurrent.forEach(a => {
       const dateKey = getLocalDateString(new Date(a.date));
       if (chartDataMap[dateKey]) {
@@ -328,9 +353,10 @@ exports.getDashboardStats = async (req, res) => {
     // 3. Cost structure (Ads, Inventory/COGS, Logistics)
     const totalCOGS = chartData.reduce((sum, d) => sum + d.cogs, 0);
     const totalAds = adCurrentTotal;
+    const totalAffiliate = affiliateFeeCurrentTotal;
     const totalLogisticsAndReturns = currentLogistics + currentReturnCosts;
     
-    const totalCostForStructure = totalCOGS + totalAds + totalLogisticsAndReturns;
+    const totalCostForStructure = totalCOGS + totalAds + totalAffiliate + totalLogisticsAndReturns;
     
     const costStructure = {
       ads: totalCostForStructure > 0 ? (totalAds / totalCostForStructure * 100) : 0,
@@ -345,7 +371,7 @@ exports.getDashboardStats = async (req, res) => {
     ordersCurrent.forEach(o => {
       const src = o.source || 'khác';
       if (!platformMap[src]) {
-        platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0 };
+        platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0, affiliate_fee: 0 };
       }
       if ((o.status || 'completed') === 'completed') {
         if (!o.is_replacement && !o.is_seeding) {
@@ -358,7 +384,21 @@ exports.getDashboardStats = async (req, res) => {
         platformMap[src].returned += 1;
       }
     });
-    const platformStats = Object.values(platformMap).sort((a, b) => b.revenue - a.revenue);
+
+    currentFees.forEach(a => {
+      const src = a.platform || 'khác';
+      if (a.amount && a.amount > 0) {
+        if (!platformMap[src]) {
+          platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0, affiliate_fee: 0 };
+        }
+        platformMap[src].affiliate_fee = (platformMap[src].affiliate_fee || 0) + (a.amount * prorateFactor);
+      }
+    });
+
+    const platformStats = Object.values(platformMap).map(p => {
+      p.affiliate_fee = p.affiliate_fee || 0;
+      return p;
+    }).sort((a, b) => b.revenue - a.revenue);
 
     // 5. Product Stats (per product)
     const productMap = {};

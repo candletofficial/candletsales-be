@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const fundTransactionSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['admin_deposit', 'revenue_withdrawal', 'import_payment', 'ad_topup', 'seeding_payment', 'shipping_payment', 'system_adjustment', 'expense_payment'],
+    enum: ['admin_deposit', 'admin_withdrawal', 'revenue_withdrawal', 'import_payment', 'ad_topup', 'seeding_payment', 'shipping_payment', 'system_adjustment', 'expense_payment', 'platform_adjustment', 'ad_adjustment'],
     required: true
   },
   amount: {
@@ -19,6 +19,10 @@ const fundTransactionSchema = new mongoose.Schema({
   fund_change: {
     type: Number,
     required: true
+  },
+  platform_change: {
+    type: Number,
+    default: 0
   },
   source: {
     type: String, // 'shopee', 'tiktok', etc. (only for revenue_withdrawal)
@@ -37,6 +41,11 @@ const fundTransactionSchema = new mongoose.Schema({
   expense_ticket_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ExpenseTicket',
+    default: null
+  },
+  ad_cost_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'AdCost',
     default: null
   },
   note: {

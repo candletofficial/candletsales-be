@@ -7,5 +7,7 @@ router.get('/transactions', fundController.getTransactions);
 router.post('/deposit', fundController.deposit);
 router.post('/withdraw-revenue', fundController.withdrawRevenue);
 router.post('/withdraw-capital', fundController.withdrawCapital);
+router.post('/sync', fundController.syncFund);
+router.delete('/transactions/all', fundController.deleteAllTransactions);
 
 module.exports = router;

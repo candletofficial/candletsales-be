@@ -25,28 +25,36 @@ exports.getSummary = async (req, res) => {
       { $group: { _id: '$source', totalWithdrawn: { $sum: '$amount' } } }
     ]);
 
+    const adjustmentAgg = await FundTransaction.aggregate([
+      { $match: { type: 'platform_adjustment' } },
+      { $group: { _id: '$source', totalAdjustment: { $sum: '$platform_change' } } }
+    ]);
+
     const revenueMap = {};
     const withdrawnMap = {};
+    const adjustmentMap = {};
 
     orderRevenueAgg.forEach(item => {
       const source = item._id || 'khác';
       revenueMap[source] = item.totalRevenue;
     });
 
-    withdrawnAgg.forEach(item => {
+    adjustmentAgg.forEach(item => {
       const source = item._id || 'khác';
-      withdrawnMap[source] = item.totalWithdrawn;
+      adjustmentMap[source] = item.totalAdjustment;
     });
 
     const platformBalances = PLATFORMS.map(platform => {
       const totalRevenue = revenueMap[platform] || 0;
       const totalWithdrawn = withdrawnMap[platform] || 0;
-      const availableBalance = totalRevenue - totalWithdrawn;
+      const totalAdjustment = adjustmentMap[platform] || 0;
+      const availableBalance = totalRevenue - totalWithdrawn + totalAdjustment;
       
       return {
         platform,
         totalRevenue,
         totalWithdrawn,
+        totalAdjustment,
         availableBalance
       };
     });
@@ -97,6 +105,16 @@ exports.getTransactions = async (req, res) => {
     const filter = {};
     if (req.query.type && req.query.type !== 'all') {
       filter.type = req.query.type;
+    }
+
+    if (req.query.startDate || req.query.endDate) {
+      filter.createdAt = {};
+      if (req.query.startDate) {
+        filter.createdAt.$gte = new Date(req.query.startDate);
+      }
+      if (req.query.endDate) {
+        filter.createdAt.$lte = new Date(req.query.endDate);
+      }
     }
 
     let query = FundTransaction.find(filter)
@@ -239,5 +257,117 @@ exports.withdrawRevenue = async (req, res) => {
   } catch (error) {
     console.error('Error in withdrawRevenue:', error);
     res.status(500).json({ success: false, message: 'Lỗi khi rút tiền' });
+  }
+};
+
+exports.syncFund = async (req, res) => {
+  try {
+    const { target, newAmount, note, created_by } = req.body;
+    if (newAmount === undefined || newAmount < 0) {
+      return res.status(400).json({ success: false, message: 'Số tiền mới không hợp lệ' });
+    }
+
+    if (target === 'total_fund') {
+      const fundAgg = await FundTransaction.aggregate([
+        { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+      ]);
+      const currentBalance = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+      const diff = newAmount - currentBalance;
+
+      if (diff !== 0) {
+        const transaction = new FundTransaction({
+          type: 'system_adjustment',
+          amount: Math.abs(diff),
+          fund_change: diff,
+          note: note || 'Đồng bộ hệ thống (Tổng tài sản chung)',
+          created_by: created_by || 'Admin'
+        });
+        await transaction.save();
+      }
+      return res.json({ success: true, message: 'Đồng bộ tài sản chung thành công' });
+    } else if (PLATFORMS.includes(target)) {
+      // Calculate current platform balance
+      const orderRevenueAgg = await Order.aggregate([
+        { $match: { status: { $ne: 'returned' }, source: target } },
+        { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
+      ]);
+      const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;
+
+      const withdrawnAgg = await FundTransaction.aggregate([
+        { $match: { type: 'revenue_withdrawal', source: target } },
+        { $group: { _id: null, totalWithdrawn: { $sum: '$amount' } } }
+      ]);
+      const totalWithdrawn = withdrawnAgg.length > 0 ? withdrawnAgg[0].totalWithdrawn : 0;
+
+      const adjustmentAgg = await FundTransaction.aggregate([
+        { $match: { type: 'platform_adjustment', source: target } },
+        { $group: { _id: null, totalAdjustment: { $sum: '$platform_change' } } }
+      ]);
+      const totalAdjustment = adjustmentAgg.length > 0 ? adjustmentAgg[0].totalAdjustment : 0;
+
+      const currentBalance = totalRevenue - totalWithdrawn + totalAdjustment;
+      const diff = newAmount - currentBalance;
+
+      if (diff !== 0) {
+        const transaction = new FundTransaction({
+          type: 'platform_adjustment',
+          amount: Math.abs(diff),
+          fund_change: 0,
+          platform_change: diff,
+          source: target,
+          note: note || `Đồng bộ hệ thống (Nền tảng ${target})`,
+          created_by: created_by || 'Admin'
+        });
+        await transaction.save();
+      }
+      return res.json({ success: true, message: `Đồng bộ số dư ${target} thành công` });
+    } else {
+      return res.status(400).json({ success: false, message: 'Mục tiêu đồng bộ không hợp lệ' });
+    }
+  } catch (error) {
+    console.error('Error in syncFund:', error);
+    res.status(500).json({ success: false, message: 'Lỗi khi đồng bộ tài sản' });
+  }
+};
+
+exports.deleteAllTransactions = async (req, res) => {
+  try {
+    // Xoá tất cả lịch sử giao dịch hiện tại
+    await FundTransaction.deleteMany({});
+
+    // Vì số dư khả dụng của nền tảng = tổng doanh thu (Order) - rút - điều chỉnh.
+    // Xoá lịch sử làm rút/điều chỉnh = 0 -> số dư nền tảng sẽ bị đội lên bằng tổng doanh thu từ trước đến nay.
+    // Để reset số dư nền tảng về 0, ta cần chèn 1 giao dịch điều chỉnh âm đúng bằng tổng doanh thu.
+    const orderRevenueAgg = await Order.aggregate([
+      { $match: { status: { $ne: 'returned' } } },
+      { $group: { _id: '$source', totalRevenue: { $sum: '$total_price' } } }
+    ]);
+
+    const adjustmentTransactions = [];
+    orderRevenueAgg.forEach(item => {
+      const source = item._id || 'khác';
+      const totalRevenue = item.totalRevenue;
+      
+      if (totalRevenue > 0) {
+        adjustmentTransactions.push({
+          type: 'platform_adjustment',
+          amount: totalRevenue,
+          fund_change: 0,
+          platform_change: -totalRevenue,
+          source: source,
+          note: `Hệ thống tự động Reset số dư về 0`,
+          created_by: 'System'
+        });
+      }
+    });
+
+    if (adjustmentTransactions.length > 0) {
+      await FundTransaction.insertMany(adjustmentTransactions);
+    }
+
+    res.json({ success: true, message: 'Đã xoá toàn bộ lịch sử và reset số dư về 0' });
+  } catch (error) {
+    console.error('Error in deleteAllTransactions:', error);
+    res.status(500).json({ success: false, message: 'Lỗi khi xoá lịch sử giao dịch' });
   }
 };
