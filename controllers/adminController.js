@@ -443,7 +443,7 @@ exports.getDashboardStats = async (req, res) => {
            itemRevenue = (orderNetRevenue * itemShare);
            productMap[key].totalRevenue += itemRevenue;
         } else {
-           itemRevenue = orderNetRevenue;
+           itemRevenue = orderNetRevenue / (o.items.length || 1);
            productMap[key].totalRevenue += itemRevenue;
         }
         productMap[key].variantsMap[variantKey].totalRevenue += itemRevenue;

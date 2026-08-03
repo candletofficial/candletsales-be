@@ -69,13 +69,25 @@ const fetchDashboardData = async () => {
   // Product stats
   const productMap = {};
   normalCompletedCurrent.forEach((o) => {
+    const orderTotalRaw = (o.items || []).reduce((sum, item) => sum + ((item.unit_price || 0) * item.quantity), 0);
+    const orderNetRevenue = (o.total_price || 0) - (o.logistics_cost || 0);
+
     (o.items || []).forEach((item) => {
       const key = item.productId || String(item.product_id);
       if (!productMap[key]) {
         productMap[key] = { productId: item.productId, product_name: item.product_name, totalQty: 0, totalRevenue: 0, totalCOGS: 0, returnedQty: 0 };
       }
       productMap[key].totalQty += item.quantity;
-      productMap[key].totalRevenue += (item.unit_price || 0) * item.quantity;
+      
+      let itemRevenue = 0;
+      if (orderTotalRaw > 0) {
+         const itemShare = ((item.unit_price || 0) * item.quantity) / orderTotalRaw;
+         itemRevenue = orderNetRevenue * itemShare;
+      } else {
+         itemRevenue = orderNetRevenue / (o.items.length || 1);
+      }
+      productMap[key].totalRevenue += itemRevenue;
+      
       productMap[key].totalCOGS += (item.unit_cost || 0) * item.quantity;
     });
   });
