@@ -60,7 +60,7 @@ const orderSchema = new mongoose.Schema({
   // Trạng thái đơn hàng
   status: {
     type: String,
-    enum: ['completed', 'returned'],
+    enum: ['pending', 'completed', 'returned'],
     default: 'completed',
   },
   return_cost: { type: Number, default: 0 },   // Chi phí hoàn (lấy từ cấu hình khi đánh dấu hoàn)

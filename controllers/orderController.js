@@ -218,6 +218,20 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
+    // Ghi nhận doanh thu đơn hàng vào nền tảng
+    if (order.total_price > 0 && (order.status === 'completed' || !order.status)) {
+      await FundTransaction.create({
+        type: 'order_revenue',
+        amount: order.total_price,
+        fund_change: 0,
+        platform_change: order.total_price,
+        source: order.source,
+        order_id: order._id,
+        note: `Doanh thu đơn hàng ${order.orderId}`,
+        created_by: req.user?.username || 'System'
+      });
+    }
+
     // Cập nhật used_count của Coupon nếu có dùng mã giảm giá
     if (discount_code && discount_amount > 0) {
       const Coupon = require('../models/Coupon');
@@ -276,9 +290,65 @@ exports.updateOrder = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
 
-    // Không cho phép chỉnh sửa đơn hàng đã bị hoàn
+    // Nếu đơn hàng đã bị hoàn, chỉ cho phép cập nhật phí hoàn (return_cost) hoặc ghi chú
     if (oldOrder.status === 'returned') {
-      return res.status(400).json({ success: false, message: 'Không thể chỉnh sửa đơn hàng đã bị hoàn' });
+      let updated = false;
+      if (req.body.return_cost !== undefined) {
+        const newReturnCost = Number(req.body.return_cost);
+        const oldReturnCost = oldOrder.return_cost || 0;
+        
+        if (newReturnCost !== oldReturnCost) {
+          const FundTransaction = require('../models/FundTransaction');
+          // Xóa giao dịch phí hoàn cũ
+          await FundTransaction.deleteMany({
+            order_id: oldOrder._id,
+            note: { $regex: /Phí hoàn đơn hàng/i }
+          });
+          
+          // Tạo giao dịch phí hoàn mới nếu > 0
+          if (newReturnCost > 0) {
+            const orderSource = oldOrder.source || 'khác';
+            const platformsWithFund = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
+
+            if (platformsWithFund.includes(orderSource)) {
+              await FundTransaction.create({
+                type: 'revenue_withdrawal',
+                amount: newReturnCost,
+                fee: 0,
+                fund_change: 0,
+                source: orderSource,
+                order_id: oldOrder._id,
+                note: `Phí hoàn đơn hàng ${oldOrder.orderId} (từ tài sản riêng)`,
+                created_by: 'System'
+              });
+            } else {
+              await FundTransaction.create({
+                type: 'expense_payment',
+                amount: newReturnCost,
+                fee: 0,
+                fund_change: -newReturnCost,
+                order_id: oldOrder._id,
+                note: `Phí hoàn đơn hàng ${oldOrder.orderId} (từ tài sản chung)`,
+                created_by: 'System'
+              });
+            }
+          }
+          oldOrder.return_cost = newReturnCost;
+          updated = true;
+        }
+      }
+      
+      if (req.body.note !== undefined && req.body.note !== oldOrder.note) {
+        oldOrder.note = req.body.note;
+        updated = true;
+      }
+      
+      if (updated) {
+        await oldOrder.save();
+        return res.status(200).json({ success: true, message: 'Cập nhật đơn hàng hoàn thành công' });
+      }
+      
+      return res.status(200).json({ success: true, message: 'Không có thay đổi nào được áp dụng.' });
     }
 
     const newSeedingCost = Number(seeding_cost || 0);
@@ -460,6 +530,32 @@ exports.updateOrder = async (req, res, next) => {
       }
     }
 
+    // Xử lý FundTransaction cho order_revenue
+    if (order.status === 'completed' || !order.status) {
+      const existingRevTx = await FundTransaction.findOne({ order_id: order._id, type: 'order_revenue' });
+      if (order.total_price > 0) {
+        if (existingRevTx) {
+          existingRevTx.amount = order.total_price;
+          existingRevTx.platform_change = order.total_price;
+          existingRevTx.source = order.source;
+          await existingRevTx.save();
+        } else {
+          await FundTransaction.create({
+            type: 'order_revenue',
+            amount: order.total_price,
+            fund_change: 0,
+            platform_change: order.total_price,
+            source: order.source,
+            order_id: order._id,
+            note: `Doanh thu đơn hàng ${order.orderId}`,
+            created_by: req.user?.username || 'System'
+          });
+        }
+      } else if (existingRevTx) {
+        await existingRevTx.deleteOne();
+      }
+    }
+
     // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
     triggerAutoConfirmImports().catch(console.error);
 
@@ -532,104 +628,117 @@ exports.deleteOrder = async (req, res, next) => {
   }
 };
 
+exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
+  const SystemConfig = require('../models/SystemConfig');
+  const FundTransaction = require('../models/FundTransaction');
+
+  const order = await Order.findById(orderId);
+  if (!order) {
+    throw new Error('Không tìm thấy đơn hàng');
+  }
+
+  if (order.status === 'returned') {
+    throw new Error('Đơn hàng này đã được đánh dấu bị hoàn trước đó');
+  }
+
+  // Đọc chi phí hoàn từ tham số hoặc cấu hình hệ thống
+  let returnCost = 0;
+  if (explicitReturnCost !== null && explicitReturnCost !== undefined) {
+    returnCost = Number(explicitReturnCost);
+  } else {
+    const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' });
+    let returnCosts = {};
+    if (returnCostConfig && returnCostConfig.value) {
+      try {
+        returnCosts = JSON.parse(returnCostConfig.value);
+      } catch (e) {}
+    }
+    const orderSource = order.source || 'khác';
+    returnCost = returnCosts[orderSource] ? Number(returnCosts[orderSource]) : 0;
+  }
+
+  // Hoàn lại nguyên liệu vào kho (chỉ hoàn sản phẩm, không hoàn bao bì vận chuyển vì đã hỏng/sử dụng)
+  try {
+    const { deductions: refunds } = await buildMaterialDeductions(order.items, null);
+    const updatePromises = [];
+    for (const [materialId, refundQty] of refunds.entries()) {
+      updatePromises.push(
+        (async () => {
+          const mat = await Material.findById(materialId);
+          if (!mat) return;
+          const newStock = Number((mat.stock + refundQty).toFixed(4));
+          const newActual = Number((mat.actualStock + refundQty).toFixed(4));
+          const newStatus = calcStatus(newActual, mat.minStock);
+          await Material.findByIdAndUpdate(materialId, {
+            stock: newStock,
+            actualStock: newActual,
+            status: newStatus,
+          });
+        })()
+      );
+    }
+    await Promise.all(updatePromises);
+  } catch (refundErr) {
+    console.error('[processReturnOrder] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
+  }
+
+  // Xóa giao dịch tự động chuyển doanh thu nếu có (vì đơn đã bị hoàn)
+  await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } });
+
+  // Cập nhật trạng thái đơn hàng
+  const updatedOrder = await Order.findByIdAndUpdate(
+    orderId,
+    {
+      status: 'returned',
+      return_cost: returnCost,
+      returned_at: new Date(),
+    },
+    { new: true }
+  );
+
+  // Xử lý trừ phí hoàn vào tài sản (nếu có phí hoàn)
+  if (returnCost > 0) {
+    const orderSource = updatedOrder.source || 'khác';
+    const platformsWithFund = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
+
+    if (platformsWithFund.includes(orderSource)) {
+      // Trừ vào tài sản riêng của nền tảng (sử dụng revenue_withdrawal với fund_change = 0)
+      // Chấp nhận trừ âm nếu tài sản riêng không đủ
+      await FundTransaction.create({
+        type: 'revenue_withdrawal',
+        amount: returnCost,
+        fee: 0,
+        fund_change: 0,
+        source: orderSource,
+        order_id: updatedOrder._id,
+        note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản riêng)`,
+        created_by: 'System'
+      });
+    } else {
+      // Trừ vào tài sản chung đối với các nền tảng không giữ tiền (facebook, instagram, pos...)
+      await FundTransaction.create({
+        type: 'expense_payment',
+        amount: returnCost,
+        fee: 0,
+        fund_change: -returnCost,
+        order_id: updatedOrder._id,
+        note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản chung)`,
+        created_by: 'System'
+      });
+    }
+  }
+
+  return { updatedOrder, returnCost };
+};
+
 // PATCH /api/orders/:id/return
 exports.markAsReturned = async (req, res, next) => {
   try {
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
-    }
-
-    if (order.status === 'returned') {
-      return res.status(400).json({ success: false, message: 'Đơn hàng này đã được đánh dấu bị hoàn trước đó' });
-    }
-
-    // Đọc chi phí hoàn từ body hoặc cấu hình hệ thống
-    let returnCost = 0;
+    let explicitReturnCost = null;
     if (req.body && req.body.returnCost !== undefined && req.body.returnCost !== null) {
-      returnCost = Number(req.body.returnCost);
-    } else {
-      const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' });
-      let returnCosts = {};
-      if (returnCostConfig && returnCostConfig.value) {
-        try {
-          returnCosts = JSON.parse(returnCostConfig.value);
-        } catch (e) {}
-      }
-      const orderSource = order.source || 'khác';
-      returnCost = returnCosts[orderSource] ? Number(returnCosts[orderSource]) : 0;
+      explicitReturnCost = req.body.returnCost;
     }
-
-    // Hoàn lại nguyên liệu vào kho (chỉ hoàn sản phẩm, không hoàn bao bì vận chuyển vì đã hỏng/sử dụng)
-    try {
-      const { deductions: refunds } = await buildMaterialDeductions(order.items, null);
-      const updatePromises = [];
-      for (const [materialId, refundQty] of refunds.entries()) {
-        updatePromises.push(
-          (async () => {
-            const mat = await Material.findById(materialId);
-            if (!mat) return;
-            const newStock = Number((mat.stock + refundQty).toFixed(4));
-            const newActual = Number((mat.actualStock + refundQty).toFixed(4));
-            const newStatus = calcStatus(newActual, mat.minStock);
-            await Material.findByIdAndUpdate(materialId, {
-              stock: newStock,
-              actualStock: newActual,
-              status: newStatus,
-            });
-          })()
-        );
-      }
-      await Promise.all(updatePromises);
-    } catch (refundErr) {
-      console.error('[markAsReturned] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
-    }
-
-    // Xóa giao dịch tự động chuyển doanh thu nếu có (vì đơn đã bị hoàn)
-    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } });
-
-    // Cập nhật trạng thái đơn hàng
-    const updatedOrder = await Order.findByIdAndUpdate(
-      req.params.id,
-      {
-        status: 'returned',
-        return_cost: returnCost,
-        returned_at: new Date(),
-      },
-      { new: true }
-    );
-
-    // Xử lý trừ phí hoàn vào tài sản (nếu có phí hoàn)
-    if (returnCost > 0) {
-      const orderSource = updatedOrder.source || 'khác';
-      const platformsWithFund = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
-
-      if (platformsWithFund.includes(orderSource)) {
-        // Trừ vào tài sản riêng của nền tảng (sử dụng revenue_withdrawal với fund_change = 0)
-        // Chấp nhận trừ âm nếu tài sản riêng không đủ
-        await FundTransaction.create({
-          type: 'revenue_withdrawal',
-          amount: returnCost,
-          fee: 0,
-          fund_change: 0,
-          source: orderSource,
-          order_id: updatedOrder._id,
-          note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản riêng)`,
-          created_by: 'System'
-        });
-      } else {
-        // Trừ vào tài sản chung đối với các nền tảng không giữ tiền (facebook, instagram, pos...)
-        await FundTransaction.create({
-          type: 'expense_payment',
-          amount: returnCost,
-          fee: 0,
-          fund_change: -returnCost,
-          order_id: updatedOrder._id,
-          note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản chung)`,
-          created_by: 'System'
-        });
-      }
-    }
+    const { updatedOrder, returnCost } = await exports.processReturnOrder(req.params.id, explicitReturnCost);
 
     res.status(200).json({
       success: true,
@@ -637,6 +746,12 @@ exports.markAsReturned = async (req, res, next) => {
       message: `Đã đánh dấu đơn hàng bị hoàn. Chi phí hoàn: ${returnCost.toLocaleString('vi-VN')}đ`,
     });
   } catch (error) {
+    if (error.message === 'Không tìm thấy đơn hàng') {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    if (error.message === 'Đơn hàng này đã được đánh dấu bị hoàn trước đó') {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     next(error);
   }
 };

@@ -9,9 +9,10 @@ const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000
 exports.handlePancakeWebhook = async (req, res, next) => {
   try {
     const payload = req.body;
-    require('fs').writeFileSync('last_payload.json', JSON.stringify(payload, null, 2));
     console.log('\n=== PANCAKE WEBHOOK RECEIVED ===');
     console.log(`Processing Order ID: ${payload.id}, Event: ${payload.event_type}`);
+    console.log(`[DEBUG] status_code=${payload.status}, status_name="${payload.status_name}", partner_status="${payload.partner?.partner_status}"`);
+    console.log(`[DEBUG] display_id=${payload.display_id}`);
 
     // Validate payload
     if (!payload.id || !payload.customer || !payload.items) {
@@ -62,11 +63,151 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         return res.status(200).json({ success: true, message: 'Order deleted and materials refunded' });
       }
 
+      // Check if order is returned
+      const isReturned = statusName.includes('đã hoàn') || statusName === 'hoàn' || statusName.includes('hoàn hàng') || statusName.includes('chuyển hoàn') || statusName.includes('returned') || (payload.partner && payload.partner.partner_status === 'returned');
+      
+      if (isReturned && existingOrder.status !== 'returned') {
+        console.log(`Order ${payload.id} is returned on Pancake. Marking as returned...`);
+        const { processReturnOrder } = require('./orderController');
+        try {
+          await processReturnOrder(existingOrder._id, null);
+          return res.status(200).json({ success: true, message: 'Order marked as returned' });
+        } catch (err) {
+          console.error(`Failed to mark order ${payload.id} as returned:`, err.message);
+          // Don't return 500, return 200 so Pancake doesn't retry infinitely
+          return res.status(200).json({ success: false, message: 'Failed to mark as returned' });
+        }
+      }
+
+      let updated = false;
+
+      // Check if order became completed from pending
+      const isCompleted = 
+        payload.status === 8 || payload.status === 16 ||
+        statusName.includes('đã thu tiền') || 
+        statusName.includes('hoàn thành') || 
+        statusName.includes('đã đối soát') ||
+        statusName === 'received_money' ||
+        statusName === 'completed' ||
+        statusName === 'done' ||
+        statusName === 'paid' ||
+        statusName === 'delivered';
+      if (isCompleted && existingOrder.status === 'pending') {
+        console.log(`Order ${payload.id} is now completed. Marking as completed...`);
+        existingOrder.status = 'completed';
+        updated = true;
+
+        const FundTransaction = require('../models/FundTransaction');
+        
+        // Calculate new amount for transaction log
+        const finalAmount = (payload.cash || 0) + 
+                            (payload.transfer_money || 0) + 
+                            (payload.charged_by_card || 0) + 
+                            (payload.money_to_collect || payload.cod || 0);
+        const newOrderAmount = finalAmount > 0 ? finalAmount : (payload.buyer_total_amount || payload.total_price_after_sub_discount || 0);
+        const revenueAmount = newOrderAmount > 0 ? newOrderAmount : existingOrder.total_price;
+
+        await FundTransaction.create({
+          type: 'order_revenue',
+          amount: revenueAmount,
+          fund_change: 0,
+          platform_change: revenueAmount,
+          source: existingOrder.source,
+          order_id: existingOrder._id,
+          note: `Doanh thu đơn hàng ${existingOrder.orderId}`,
+          created_by: 'System'
+        });
+      }
+      // NOTE: Không tự động hạ cấp đơn từ 'completed' xuống 'pending'
+      // vì Pancake có thể gửi webhook nhiều lần với trạng thái khác nhau (ghi chú, địa chỉ, ...)
+      // Đơn đã được xác nhận "đã thu tiền" sẽ chỉ thay đổi khi bị "hoàn" chính thức
+
+      // Check if total_price changed
+      const finalAmount = (payload.cash || 0) + 
+                          (payload.transfer_money || 0) + 
+                          (payload.charged_by_card || 0) + 
+                          (payload.money_to_collect || payload.cod || 0);
+      const newOrderAmount = finalAmount > 0 ? finalAmount : (payload.buyer_total_amount || payload.total_price_after_sub_discount || 0);
+
+      if (newOrderAmount > 0 && existingOrder.total_price !== newOrderAmount) {
+        console.log(`Order ${payload.id} amount changed from ${existingOrder.total_price} to ${newOrderAmount}. Updating...`);
+        existingOrder.total_price = newOrderAmount;
+        updated = true;
+      }
+
+      // Sync customer info and note
+      if (payload.customer) {
+        if (payload.customer.name && existingOrder.customer_name !== payload.customer.name) {
+          existingOrder.customer_name = payload.customer.name;
+          updated = true;
+        }
+        if (payload.customer.phone_numbers && payload.customer.phone_numbers.length > 0) {
+          if (existingOrder.customer_phone !== payload.customer.phone_numbers[0]) {
+            existingOrder.customer_phone = payload.customer.phone_numbers[0];
+            updated = true;
+          }
+        }
+        if (payload.customer.shipping_address && payload.customer.shipping_address.full_address) {
+          if (existingOrder.customer_address !== payload.customer.shipping_address.full_address) {
+            existingOrder.customer_address = payload.customer.shipping_address.full_address;
+            updated = true;
+          }
+        }
+      }
+      
+      if (payload.note !== undefined && existingOrder.note !== payload.note) {
+        existingOrder.note = payload.note;
+        updated = true;
+      }
+
+      // If unit_cost is 0 for any item, we should try to recalculate it
+      const hasZeroCost = existingOrder.items.some(i => !i.unit_cost || i.unit_cost === 0);
+      if (hasZeroCost) {
+        const allProducts = await Product.find().populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+        for (let item of existingOrder.items) {
+          if (!item.unit_cost || item.unit_cost === 0) {
+            let matchedProduct = allProducts.find(p => p._id.toString() === item.product_id?.toString());
+            if (matchedProduct) {
+              let base_cost = 0;
+              if (matchedProduct.base_ingredients) {
+                matchedProduct.base_ingredients.forEach(bi => {
+                  if (bi.ingredient_id && bi.ingredient_id.price) {
+                    base_cost += bi.ingredient_id.price * bi.quantity;
+                  }
+                });
+              }
+              let unit_cost = base_cost;
+              if (item.sku_id && matchedProduct.skus) {
+                const matchedSku = matchedProduct.skus.find(s => s.id === item.sku_id);
+                if (matchedSku && matchedSku.extra_ingredients) {
+                  let extra_cost = 0;
+                  matchedSku.extra_ingredients.forEach(ei => {
+                    if (ei.ingredient_id && ei.ingredient_id.price) {
+                      extra_cost += ei.ingredient_id.price * ei.quantity;
+                    }
+                  });
+                  unit_cost += extra_cost;
+                }
+              }
+              if (unit_cost > 0) {
+                item.unit_cost = unit_cost;
+                updated = true;
+              }
+            }
+          }
+        }
+      }
+
+      if (updated) {
+        await existingOrder.save();
+        return res.status(200).json({ success: true, message: 'Order updated' });
+      }
+
       console.log(`Order ${payload.id} already exists. Skipping creation.`);
       return res.status(200).json({ success: true, message: 'Order already exists' });
     }
 
-    const allProducts = await Product.find();
+    const allProducts = await Product.find().populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
     const orderItems = [];
 
     // Map Pancake items to our Products
@@ -78,14 +219,10 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       let matchedProduct = null;
       let matchedSkuId = null;
 
-      // 1. Try to match by SKU Code (Mã sản phẩm hoặc Mã SKU)
+      // 1. Try to match EXACTLY by SKU Code
       if (shopeeSkuCode) {
         const skuCodeUpper = String(shopeeSkuCode).toUpperCase();
         for (const p of allProducts) {
-          if (p.productId && p.productId.toUpperCase() === skuCodeUpper) {
-            matchedProduct = p;
-            break;
-          }
           if (p.skus && p.skus.length > 0) {
             const foundSku = p.skus.find(s => s.id && s.id.toUpperCase() === skuCodeUpper);
             if (foundSku) {
@@ -94,23 +231,40 @@ exports.handlePancakeWebhook = async (req, res, next) => {
               break;
             }
           }
+          if (!matchedProduct && p.productId && p.productId.toUpperCase() === skuCodeUpper) {
+            matchedProduct = p;
+            break;
+          }
         }
       }
 
-      // 2. Fallback: Check if the SKU code is embedded inside the Shopee Name or Shopee Detail
+      // 2. If no exact match, fallback to substring matching against ALL SKUs and ProductIDs sorted by length
       if (!matchedProduct) {
-        const shopeeFullTextUpper = (shopeeName + ' ' + shopeeSku).toUpperCase();
+        const shopeeFullTextUpper = (shopeeName + ' ' + shopeeSku + ' ' + shopeeSkuCode).toUpperCase();
+        const allIdentifiers = [];
+        
         for (const p of allProducts) {
           if (p.skus && p.skus.length > 0) {
-            const foundSku = p.skus.find(s => s.id && shopeeFullTextUpper.includes(s.id.toUpperCase()));
-            if (foundSku) {
-              matchedProduct = p;
-              matchedSkuId = foundSku.id;
-              break;
+            for (const s of p.skus) {
+              if (s.id) {
+                allIdentifiers.push({ type: 'sku', id: s.id.toUpperCase(), skuId: s.id, product: p });
+              }
             }
           }
-          if (p.productId && shopeeFullTextUpper.includes(p.productId.toUpperCase())) {
-            matchedProduct = p;
+          if (p.productId) {
+            allIdentifiers.push({ type: 'product', id: p.productId.toUpperCase(), product: p });
+          }
+        }
+        
+        // Sort by length descending (longest string matches first to prevent partial matches like SET inside RBY_SET)
+        allIdentifiers.sort((a, b) => b.id.length - a.id.length);
+        
+        for (const identifier of allIdentifiers) {
+          if (shopeeFullTextUpper.includes(identifier.id)) {
+            matchedProduct = identifier.product;
+            if (identifier.type === 'sku') {
+              matchedSkuId = identifier.skuId;
+            }
             break;
           }
         }
@@ -127,6 +281,58 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         }
       }
 
+      // 4. If we found a product but no SKU, try to find a SKU from the variation detail
+      if (matchedProduct && !matchedSkuId && matchedProduct.skus && matchedProduct.skus.length > 0) {
+        const variationDetailUpper = shopeeSku.toUpperCase();
+        const variationDetailLower = shopeeSku.toLowerCase();
+        
+        // 4a. Try exact match on sku id in variation detail
+        const sortedProductSkus = [...matchedProduct.skus].sort((a, b) => (b.id?.length || 0) - (a.id?.length || 0));
+        for (const s of sortedProductSkus) {
+          if (s.id && variationDetailUpper.includes(s.id.toUpperCase())) {
+            matchedSkuId = s.id;
+            break;
+          }
+        }
+        
+        // 4b. If still not found, try to match by sku label
+        if (!matchedSkuId) {
+          for (const s of matchedProduct.skus) {
+            if (s.label && variationDetailLower.includes(s.label.toLowerCase())) {
+              matchedSkuId = s.id;
+              break;
+            }
+          }
+        }
+      }
+
+      let unit_cost = 0;
+      if (matchedProduct) {
+        let base_cost = 0;
+        if (matchedProduct.base_ingredients) {
+          matchedProduct.base_ingredients.forEach(item => {
+            if (item.ingredient_id && item.ingredient_id.price) {
+              base_cost += item.ingredient_id.price * item.quantity;
+            }
+          });
+        }
+        
+        unit_cost = base_cost;
+        
+        if (matchedSkuId && matchedProduct.skus) {
+          const matchedSku = matchedProduct.skus.find(s => s.id === matchedSkuId);
+          if (matchedSku && matchedSku.extra_ingredients) {
+            let extra_cost = 0;
+            matchedSku.extra_ingredients.forEach(item => {
+              if (item.ingredient_id && item.ingredient_id.price) {
+                extra_cost += item.ingredient_id.price * item.quantity;
+              }
+            });
+            unit_cost += extra_cost;
+          }
+        }
+      }
+
       orderItems.push({
         product_id: matchedProduct ? matchedProduct._id : null,
         productId: matchedProduct ? matchedProduct.productId : 'UNKNOWN_SHOPEE',
@@ -135,6 +341,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         sku_id: matchedSkuId, // Use the matched SKU ID if found
         sku_label: shopeeSku,
         unit_price: item.variation_info?.retail_price || 0,
+        unit_cost: unit_cost,
         quantity: item.quantity || 1
       });
     }
@@ -143,18 +350,25 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     const validItems = orderItems.filter(i => i.product_id);
     let logisticsCost = 0;
 
+    // Determine shipping method (Hỏa tốc vs Thường)
+    const payloadStr = JSON.stringify(payload).toLowerCase();
+    const isExpress = payloadStr.includes('hỏa tốc') || payloadStr.includes('instant') || payloadStr.includes('grabexpress') || payloadStr.includes('ahamove');
+    const shippingMethod = isExpress ? 'express' : 'standard';
+
     if (validItems.length > 0) {
-      const { deductions, packagingCost } = await buildMaterialDeductions(validItems, 'standard');
+      const { deductions, packagingCost } = await buildMaterialDeductions(validItems, shippingMethod);
       logisticsCost = packagingCost || 0;
 
       for (const [matId, qtyToDeduct] of deductions.entries()) {
         const mat = await Material.findById(matId);
         if (mat) {
-          const newActual = Math.max(0, Number((mat.actualStock - qtyToDeduct).toFixed(4)));
-          const newStock = Math.max(0, Number((mat.stock - qtyToDeduct).toFixed(4)));
+          const newActual = Number((mat.actualStock - qtyToDeduct).toFixed(4));
+          const newStock = Number((mat.stock - qtyToDeduct).toFixed(4));
+          const calcStatus = (actual, min) => (actual <= 0 ? 'out_of_stock' : actual <= min ? 'low_stock' : 'in_stock');
           await Material.findByIdAndUpdate(matId, {
             actualStock: newActual,
-            stock: newStock
+            stock: newStock,
+            status: calcStatus(newActual, mat.minStock),
           });
         }
       }
@@ -182,11 +396,6 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     }
     const orderedAt = rawDate ? new Date(rawDate) : new Date();
 
-    // Determine shipping method (Hỏa tốc vs Thường)
-    // Shopee express delivery usually contains "hỏa tốc", "instant", "grab", "ahamove"
-    const payloadStr = JSON.stringify(payload).toLowerCase();
-    const isExpress = payloadStr.includes('hỏa tốc') || payloadStr.includes('instant') || payloadStr.includes('grabexpress') || payloadStr.includes('ahamove');
-    const shippingMethod = isExpress ? 'express' : 'standard';
 
     // Determine order source
     let orderSource = 'khác';
@@ -202,6 +411,19 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       orderSource = 'website';
     }
 
+    const statusName = (payload.status_name || '').toLowerCase();
+    const isCompleted = 
+      payload.status === 8 || payload.status === 16 ||
+      statusName.includes('đã thu tiền') || 
+      statusName.includes('hoàn thành') || 
+      statusName.includes('đã đối soát') ||
+      statusName === 'received_money' ||
+      statusName === 'completed' ||
+      statusName === 'done' ||
+      statusName === 'paid' ||
+      statusName === 'delivered';
+    const initialStatus = isCompleted ? 'completed' : 'pending';
+
     const order = new Order({
       orderId: payload.display_id || payload.id || generateOrderId(),
       pancake_order_id: payload.id,
@@ -216,33 +438,12 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       shippingMethod: shippingMethod,
       packaging_cost: logisticsCost,
       note: payload.note || '',
-      status: 'completed',
+      status: initialStatus,
       ordered_at: orderedAt,
     });
 
     await order.save();
     console.log(`Successfully saved Pancake order as: ${order.orderId}`);
-
-    // Deduct materials for the new order
-    const { deductions } = await buildMaterialDeductions(orderItems, shippingMethod);
-    const updatePromises = [];
-    for (const [materialId, deductQty] of deductions.entries()) {
-      updatePromises.push(
-        (async () => {
-          const mat = await Material.findById(materialId);
-          if (!mat) return;
-          const newStock = Number((mat.stock - deductQty).toFixed(4));
-          const newActual = Number((mat.actualStock - deductQty).toFixed(4));
-          const calcStatus = (actual, min) => (actual <= 0 ? 'out_of_stock' : actual <= min ? 'low_stock' : 'in_stock');
-          await Material.findByIdAndUpdate(materialId, {
-            stock: newStock,
-            actualStock: newActual,
-            status: calcStatus(newActual, mat.minStock),
-          });
-        })()
-      );
-    }
-    await Promise.all(updatePromises);
 
     // Trigger auto confirm imports
     const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');

@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const fundTransactionSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['admin_deposit', 'admin_withdrawal', 'revenue_withdrawal', 'import_payment', 'ad_topup', 'seeding_payment', 'shipping_payment', 'system_adjustment', 'expense_payment', 'platform_adjustment', 'ad_adjustment'],
+    enum: ['admin_deposit', 'admin_withdrawal', 'revenue_withdrawal', 'import_payment', 'ad_topup', 'seeding_payment', 'shipping_payment', 'system_adjustment', 'expense_payment', 'platform_adjustment', 'ad_adjustment', 'order_revenue'],
     required: true
   },
   amount: {

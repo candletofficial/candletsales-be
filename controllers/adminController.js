@@ -241,17 +241,17 @@ exports.getDashboardStats = async (req, res) => {
     ]);
 
     // 1. Calculate main metrics
-    const completedCurrent = ordersCurrent.filter(o => (o.status || 'completed') === 'completed');
+    const activeCurrent = ordersCurrent.filter(o => o.status !== 'returned');
     const returnedCurrent = ordersCurrent.filter(o => o.status === 'returned');
-    const completedPrev = ordersPrev.filter(o => (o.status || 'completed') === 'completed');
+    const activePrev = ordersPrev.filter(o => o.status !== 'returned');
     const returnedPrev = ordersPrev.filter(o => o.status === 'returned');
 
-    const revCurrent = completedCurrent.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
-    const revPrev = completedPrev.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
+    const revCurrent = activeCurrent.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
+    const revPrev = activePrev.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
     const revenueGrowth = revPrev === 0 ? null : ((revCurrent - revPrev) / revPrev * 100);
 
-    const ordCurrent = ordersCurrent.filter(o => !o.is_replacement && !o.is_seeding).length;
-    const ordPrev = ordersPrev.filter(o => !o.is_replacement && !o.is_seeding).length;
+    const ordCurrent = activeCurrent.filter(o => !o.is_replacement && !o.is_seeding).length;
+    const ordPrev = activePrev.filter(o => !o.is_replacement && !o.is_seeding).length;
     const ordersGrowth = ordPrev === 0 ? null : ((ordCurrent - ordPrev) / ordPrev * 100);
 
     const inventoryValue = materials.reduce((sum, m) => sum + (m.actualStock * (m.price || 0)), 0);
@@ -275,11 +275,11 @@ exports.getDashboardStats = async (req, res) => {
     const prevFees = affiliateFees.filter(f => f.month === prevMonth && f.year === prevYear);
     const affiliateFeePrevTotal = prevFees.reduce((sum, a) => sum + (a.amount * prorateFactor), 0);
 
-    const normalCompletedCurrent = completedCurrent.filter(o => !o.is_replacement && !o.is_seeding);
-    const replacementCurrent = completedCurrent.filter(o => o.is_replacement);
-    const seedingCurrent = completedCurrent.filter(o => o.is_seeding);
+    const normalCompletedCurrent = activeCurrent.filter(o => !o.is_replacement && !o.is_seeding);
+    const replacementCurrent = activeCurrent.filter(o => o.is_replacement);
+    const seedingCurrent = activeCurrent.filter(o => o.is_seeding);
 
-    const normalCompletedPrev = completedPrev.filter(o => !o.is_replacement && !o.is_seeding);
+    const normalCompletedPrev = activePrev.filter(o => !o.is_replacement && !o.is_seeding);
 
     const currentCOGS = normalCompletedCurrent.reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
@@ -294,14 +294,14 @@ exports.getDashboardStats = async (req, res) => {
     const currentReplacementCost = replacementCurrent.reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
-    const prevReplacementCost = completedPrev.filter(o => o.is_replacement).reduce((sum, o) => {
+    const prevReplacementCost = activePrev.filter(o => o.is_replacement).reduce((sum, o) => {
       return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
 
     const currentSeedingCost = seedingCurrent.reduce((sum, o) => {
       return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
-    const prevSeedingCost = completedPrev.filter(o => o.is_seeding).reduce((sum, o) => {
+    const prevSeedingCost = activePrev.filter(o => o.is_seeding).reduce((sum, o) => {
       return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
     const seedingCostGrowth = prevSeedingCost === 0 ? null : ((currentSeedingCost - prevSeedingCost) / prevSeedingCost * 100);
@@ -326,7 +326,7 @@ exports.getDashboardStats = async (req, res) => {
     ordersCurrent.forEach(o => {
       const dateKey = getLocalDateString(new Date(o.ordered_at));
       if (chartDataMap[dateKey]) {
-        if ((o.status || 'completed') === 'completed') {
+        if (o.status !== 'returned') {
           if (!o.is_replacement && !o.is_seeding) {
             chartDataMap[dateKey].revenue += (o.total_price || 0);
           }
@@ -334,7 +334,7 @@ exports.getDashboardStats = async (req, res) => {
           const logistics = (o.logistics_cost || 0);
           chartDataMap[dateKey].cogs += cogs;
           chartDataMap[dateKey].cost += cogs + logistics + (o.seeding_cost || 0);
-        } else if (o.status === 'returned') {
+        } else {
           chartDataMap[dateKey].cost += (o.return_cost || 0);
         }
       }
@@ -373,14 +373,14 @@ exports.getDashboardStats = async (req, res) => {
       if (!platformMap[src]) {
         platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0, affiliate_fee: 0 };
       }
-      if ((o.status || 'completed') === 'completed') {
+      if (o.status !== 'returned') {
         if (!o.is_replacement && !o.is_seeding) {
           platformMap[src].orders += 1;
           platformMap[src].revenue += (o.total_price || 0);
         } else if (o.is_replacement) {
           platformMap[src].replacements += 1;
         }
-      } else if (o.status === 'returned') {
+      } else {
         platformMap[src].returned += 1;
       }
     });
@@ -544,18 +544,27 @@ exports.getDashboardStats = async (req, res) => {
         let title = 'Giao dịch quỹ';
         let type = 'fund';
         if (ft.type === 'admin_deposit') { title = 'Góp vốn quỹ'; type = 'deposit'; }
+        else if (ft.type === 'admin_withdrawal') { title = 'Rút vốn quỹ'; type = 'withdraw'; }
         else if (ft.type === 'revenue_withdrawal') { title = 'Rút doanh thu'; type = 'withdraw'; }
         else if (ft.type === 'import_payment') { title = 'Thanh toán phiếu nhập'; type = 'payment'; }
         else if (ft.type === 'seeding_payment') { title = 'Chi phí Seeding'; type = 'payment'; }
         else if (ft.type === 'shipping_payment') { title = 'Phí giao hàng'; type = 'payment'; }
         else if (ft.type === 'system_adjustment') { title = 'Đồng bộ hệ thống'; type = 'fund'; }
         else if (ft.type === 'expense_payment') { title = 'Chi tiêu'; type = 'expense'; }
+        else if (ft.type === 'order_revenue') { title = 'Doanh thu đơn hàng'; type = 'deposit'; }
+        else if (ft.type === 'platform_adjustment') { title = 'Điều chỉnh nền tảng'; type = 'fund'; }
+        
+        // Smart display: use fund_change if non-zero, else platform_change, else amount (for order_revenue/revenue_withdrawal)
+        let displayChange = ft.fund_change !== 0 ? ft.fund_change
+          : (ft.platform_change && ft.platform_change !== 0) ? ft.platform_change
+          : (ft.type === 'revenue_withdrawal' ? -(ft.amount || 0)
+          : (ft.type === 'order_revenue' ? (ft.amount || 0) : 0));
         
         recentActivities.push({
           type: type,
           title: title,
           subtitle: `Do ${ft.created_by || 'Admin'} thực hiện`,
-          detail: `${ft.fund_change >= 0 ? '+' : ''}${(ft.fund_change || 0).toLocaleString('vi-VN')} ₫`,
+          detail: `${displayChange >= 0 ? '+' : ''}${displayChange.toLocaleString('vi-VN')} đ`,
           time: ft.createdAt
         });
       });
@@ -662,17 +671,26 @@ exports.getRecentActivities = async (req, res) => {
         let title = 'Giao dịch quỹ';
         let type = 'fund';
         if (ft.type === 'admin_deposit') { title = 'Góp vốn quỹ'; type = 'deposit'; }
+        else if (ft.type === 'admin_withdrawal') { title = 'Rút vốn quỹ'; type = 'withdraw'; }
         else if (ft.type === 'revenue_withdrawal') { title = 'Rút doanh thu'; type = 'withdraw'; }
         else if (ft.type === 'import_payment') { title = 'Thanh toán phiếu nhập'; type = 'payment'; }
         else if (ft.type === 'seeding_payment') { title = 'Chi phí Seeding'; type = 'payment'; }
         else if (ft.type === 'shipping_payment') { title = 'Phí giao hàng'; type = 'payment'; }
         else if (ft.type === 'system_adjustment') { title = 'Đồng bộ hệ thống'; type = 'fund'; }
-        
+        else if (ft.type === 'expense_payment') { title = 'Chi tiêu'; type = 'expense'; }
+        else if (ft.type === 'order_revenue') { title = 'Doanh thu đơn hàng'; type = 'deposit'; }
+        else if (ft.type === 'platform_adjustment') { title = 'Điều chỉnh nền tảng'; type = 'fund'; }
+
+        const displayChange = ft.fund_change !== 0 ? ft.fund_change
+          : (ft.platform_change && ft.platform_change !== 0) ? ft.platform_change
+          : (ft.type === 'revenue_withdrawal' ? -(ft.amount || 0)
+          : (ft.type === 'order_revenue' ? (ft.amount || 0) : 0));
+
         recentActivities.push({
           type: type,
           title: title,
           subtitle: `Do ${ft.created_by || 'Admin'} thực hiện`,
-          detail: `${ft.fund_change >= 0 ? '+' : ''}${(ft.fund_change || 0).toLocaleString('vi-VN')} ₫`,
+          detail: `${displayChange >= 0 ? '+' : ''}${displayChange.toLocaleString('vi-VN')} đ`,
           time: ft.createdAt
         });
       });

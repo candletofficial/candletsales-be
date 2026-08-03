@@ -15,7 +15,7 @@ exports.getSummary = async (req, res) => {
     // 2. Calculate Platform Balances
     // Get total revenue for each platform
     const orderRevenueAgg = await Order.aggregate([
-      { $match: { status: { $ne: 'returned' } } },
+      { $match: { status: 'completed' } },
       { $group: { _id: '$source', totalRevenue: { $sum: '$total_price' } } }
     ]);
 
@@ -37,6 +37,11 @@ exports.getSummary = async (req, res) => {
     orderRevenueAgg.forEach(item => {
       const source = item._id || 'khác';
       revenueMap[source] = item.totalRevenue;
+    });
+
+    withdrawnAgg.forEach(item => {
+      const source = item._id || 'khác';
+      withdrawnMap[source] = item.totalWithdrawn;
     });
 
     adjustmentAgg.forEach(item => {
@@ -222,7 +227,7 @@ exports.withdrawRevenue = async (req, res) => {
 
     // Double check if available balance is sufficient
     const orderRevenueAgg = await Order.aggregate([
-      { $match: { status: { $ne: 'returned' }, source } },
+      { $match: { status: 'completed', source } },
       { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
     ]);
     const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;
@@ -288,7 +293,7 @@ exports.syncFund = async (req, res) => {
     } else if (PLATFORMS.includes(target)) {
       // Calculate current platform balance
       const orderRevenueAgg = await Order.aggregate([
-        { $match: { status: { $ne: 'returned' }, source: target } },
+        { $match: { status: 'completed', source: target } },
         { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
       ]);
       const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;
@@ -339,7 +344,7 @@ exports.deleteAllTransactions = async (req, res) => {
     // Xoá lịch sử làm rút/điều chỉnh = 0 -> số dư nền tảng sẽ bị đội lên bằng tổng doanh thu từ trước đến nay.
     // Để reset số dư nền tảng về 0, ta cần chèn 1 giao dịch điều chỉnh âm đúng bằng tổng doanh thu.
     const orderRevenueAgg = await Order.aggregate([
-      { $match: { status: { $ne: 'returned' } } },
+      { $match: { status: 'completed' } },
       { $group: { _id: '$source', totalRevenue: { $sum: '$total_price' } } }
     ]);
 
