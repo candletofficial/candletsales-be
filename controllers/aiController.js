@@ -27,16 +27,16 @@ const fetchDashboardData = async () => {
     Material.find({}),
   ]);
 
-  const completedCurrent = ordersCurrent.filter((o) => (o.status || 'completed') === 'completed');
+  const activeCurrent = ordersCurrent.filter((o) => o.status !== 'returned');
   const returnedCurrent = ordersCurrent.filter((o) => o.status === 'returned');
-  const normalCompletedCurrent = completedCurrent.filter((o) => !o.is_replacement && !o.is_seeding);
-  const replacementCurrent = completedCurrent.filter((o) => o.is_replacement);
-  const seedingCurrent = completedCurrent.filter((o) => o.is_seeding);
+  const normalCompletedCurrent = activeCurrent.filter((o) => !o.is_replacement && !o.is_seeding);
+  const replacementCurrent = activeCurrent.filter((o) => o.is_replacement);
+  const seedingCurrent = activeCurrent.filter((o) => o.is_seeding);
 
-  const revCurrent = completedCurrent.reduce(
+  const revCurrent = activeCurrent.reduce(
     (sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : o.total_price || 0), 0
   );
-  const ordCurrent = ordersCurrent.filter((o) => !o.is_replacement && !o.is_seeding).length;
+  const ordCurrent = activeCurrent.filter((o) => !o.is_replacement && !o.is_seeding).length;
   const adCurrentTotal = adsCurrent.reduce((sum, a) => sum + a.amount, 0);
   const inventoryValue = materials.reduce((sum, m) => sum + m.actualStock * (m.price || 0), 0);
 
@@ -56,7 +56,7 @@ const fetchDashboardData = async () => {
   ordersCurrent.forEach((o) => {
     const src = o.source || 'khác';
     if (!platformMap[src]) platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0 };
-    if ((o.status || 'completed') === 'completed') {
+    if (o.status !== 'returned') {
       if (!o.is_replacement && !o.is_seeding) {
         platformMap[src].orders += 1;
         platformMap[src].revenue += o.total_price || 0;
