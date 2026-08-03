@@ -27,7 +27,6 @@ const materialSchema = new mongoose.Schema({
   stock: {
     type: Number,
     required: true,
-    min: 0,
     default: 0,
   },
   minStock: {

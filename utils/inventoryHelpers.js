@@ -12,8 +12,8 @@ const triggerAutoConfirmImports = async () => {
     const config = await SystemConfig.findOne({ key: 'auto_confirm_out_of_stock_imports' });
     if (!config || config.value !== true) return;
 
-    // Tìm các nguyên vật liệu có actualStock = 0
-    const outOfStockMaterials = await Material.find({ actualStock: 0 }).select('_id');
+    // Tìm các nguyên vật liệu có actualStock <= 0
+    const outOfStockMaterials = await Material.find({ actualStock: { $lte: 0 } }).select('_id');
     if (outOfStockMaterials.length === 0) return;
 
     const outOfStockIds = outOfStockMaterials.map(m => m._id.toString());

@@ -236,8 +236,8 @@ exports.createOrder = async (req, res, next) => {
             const mat = await Material.findById(materialId);
             if (!mat) return;
 
-            const newStock = Math.max(0, Number((mat.stock - deductQty).toFixed(4)));
-            const newActual = Math.max(0, Number((mat.actualStock - deductQty).toFixed(4)));
+            const newStock = Number((mat.stock - deductQty).toFixed(4));
+            const newActual = Number((mat.actualStock - deductQty).toFixed(4));
             const newStatus = calcStatus(newActual, mat.minStock);
 
             await Material.findByIdAndUpdate(materialId, {

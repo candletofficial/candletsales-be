@@ -223,6 +223,31 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     await order.save();
     console.log(`Successfully saved Pancake order as: ${order.orderId}`);
 
+    // Deduct materials for the new order
+    const { deductions } = await buildMaterialDeductions(orderItems, shippingMethod);
+    const updatePromises = [];
+    for (const [materialId, deductQty] of deductions.entries()) {
+      updatePromises.push(
+        (async () => {
+          const mat = await Material.findById(materialId);
+          if (!mat) return;
+          const newStock = Number((mat.stock - deductQty).toFixed(4));
+          const newActual = Number((mat.actualStock - deductQty).toFixed(4));
+          const calcStatus = (actual, min) => (actual <= 0 ? 'out_of_stock' : actual <= min ? 'low_stock' : 'in_stock');
+          await Material.findByIdAndUpdate(materialId, {
+            stock: newStock,
+            actualStock: newActual,
+            status: calcStatus(newActual, mat.minStock),
+          });
+        })()
+      );
+    }
+    await Promise.all(updatePromises);
+
+    // Trigger auto confirm imports
+    const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
+    triggerAutoConfirmImports().catch(console.error);
+
     res.status(200).json({ success: true, message: 'Order processed successfully' });
   } catch (error) {
     console.error('Error handling Pancake webhook:', error);
