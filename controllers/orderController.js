@@ -236,8 +236,8 @@ exports.createOrder = async (req, res, next) => {
             const mat = await Material.findById(materialId);
             if (!mat) return;
 
-            const newStock = Math.max(0, mat.stock - deductQty);
-            const newActual = Math.max(0, mat.actualStock - deductQty);
+            const newStock = Math.max(0, Number((mat.stock - deductQty).toFixed(4)));
+            const newActual = Math.max(0, Number((mat.actualStock - deductQty).toFixed(4)));
             const newStatus = calcStatus(newActual, mat.minStock);
 
             await Material.findByIdAndUpdate(materialId, {
@@ -351,8 +351,8 @@ exports.updateOrder = async (req, res, next) => {
             const mat = await Material.findById(materialId);
             if (!mat) return;
 
-            const newStock = Math.max(0, mat.stock - diffQty);
-            const newActual = Math.max(0, mat.actualStock - diffQty);
+            const newStock = Math.max(0, Number((mat.stock - diffQty).toFixed(4)));
+            const newActual = Math.max(0, Number((mat.actualStock - diffQty).toFixed(4)));
             const newStatus = calcStatus(newActual, mat.minStock);
 
             await Material.findByIdAndUpdate(materialId, {
@@ -505,8 +505,8 @@ exports.deleteOrder = async (req, res, next) => {
               const mat = await Material.findById(materialId);
               if (!mat) return;
 
-              const newStock = mat.stock + refundQty;
-              const newActual = mat.actualStock + refundQty;
+              const newStock = Number((mat.stock + refundQty).toFixed(4));
+              const newActual = Number((mat.actualStock + refundQty).toFixed(4));
               const newStatus = calcStatus(newActual, mat.minStock);
 
               await Material.findByIdAndUpdate(materialId, {
@@ -569,8 +569,8 @@ exports.markAsReturned = async (req, res, next) => {
           (async () => {
             const mat = await Material.findById(materialId);
             if (!mat) return;
-            const newStock = mat.stock + refundQty;
-            const newActual = mat.actualStock + refundQty;
+            const newStock = Number((mat.stock + refundQty).toFixed(4));
+            const newActual = Number((mat.actualStock + refundQty).toFixed(4));
             const newStatus = calcStatus(newActual, mat.minStock);
             await Material.findByIdAndUpdate(materialId, {
               stock: newStock,
@@ -640,3 +640,5 @@ exports.markAsReturned = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.buildMaterialDeductions = buildMaterialDeductions;

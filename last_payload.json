@@ -1,0 +1,641 @@
+{
+  "additional_info": {
+    "booking_sn": null,
+    "delivery_deadline": "2026-08-04T23:35:09",
+    "service_partner": null
+  },
+  "bank_payments": {},
+  "event_type": "update",
+  "advanced_platform_fee": {
+    "marketplace_promotion": [
+      "CANDSC2"
+    ],
+    "payment_fee": 0,
+    "seller_transaction_fee": 0
+  },
+  "page_id": "spo_1767439204",
+  "note_print": null,
+  "charged_by_card": 0,
+  "sub_status": null,
+  "note_image": null,
+  "activated_promotion_advances": [],
+  "time_assign_care": null,
+  "surcharge": 0,
+  "bill_full_name": "P******g",
+  "p_utm_content": null,
+  "received_at_shop": false,
+  "exchange_payment": 0,
+  "is_fintab_synced": false,
+  "order_currency": "VND",
+  "is_abandoned_order": false,
+  "items_length": 1,
+  "time_send_partner": null,
+  "charged_by_qrpay": 0,
+  "updated_at": "2026-08-03T00:19:01.036312",
+  "assigning_seller": {
+    "id": "89aec528-f92d-4d9d-a14a-aede63247636",
+    "name": null,
+    "email": "candletofficial@gmail.com",
+    "phone_number": null,
+    "fb_id": null,
+    "avatar_url": null
+  },
+  "shipping_fee": 11500,
+  "is_smc": false,
+  "fee_marketplace": 0,
+  "account": "615025990",
+  "marketer": null,
+  "assigning_seller_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+  "customer_referral_code": null,
+  "creator": null,
+  "returned_reason": null,
+  "cash": 0,
+  "status_history": [
+    {
+      "name": null,
+      "status": 0,
+      "editor": null,
+      "updated_at": "2026-08-02T23:35:12",
+      "avatar_url": null,
+      "old_status": null,
+      "editor_id": null,
+      "editor_fb": null
+    },
+    {
+      "name": null,
+      "status": 1,
+      "editor": null,
+      "updated_at": "2026-08-02T23:40:13",
+      "avatar_url": null,
+      "old_status": 0,
+      "editor_id": null,
+      "editor_fb": null
+    },
+    {
+      "name": null,
+      "status": 6,
+      "editor": null,
+      "updated_at": "2026-08-02T23:50:50",
+      "avatar_url": null,
+      "old_status": 1,
+      "editor_id": null,
+      "editor_fb": null
+    }
+  ],
+  "estimate_delivery_date": null,
+  "returned_reason_name": null,
+  "status": 6,
+  "shop_id": 1022066910,
+  "exchange_value": 0,
+  "conversation_id": null,
+  "transfer_money": 0,
+  "duplicated_ip": null,
+  "marketplace_id": "-3",
+  "levera_point": 0,
+  "order_link": "https://pos.pages.fm/shop/1022066910/order?order_id=450373024886148",
+  "warehouse_id": "7daeb3e3-7b7d-4dd8-8ae0-70f7839a10e9",
+  "items": [
+    {
+      "id": 12556200272,
+      "components": null,
+      "note": null,
+      "variation_id": null,
+      "added_to_cart_quantity": 0,
+      "quantity": 1,
+      "product_id": null,
+      "measure_group_id": null,
+      "note_product": "",
+      "is_composite": null,
+      "returning_quantity": 0,
+      "assigning_seller": null,
+      "assigning_seller_id": null,
+      "total_discount": 0,
+      "variation_info": {
+        "name": "RBY_SET - Nến Thơm Cao Cấp CANDLET 150g - Nến Thủ Công Thư Dãn, Decor Phòng, Quà Tặng",
+        "fields": null,
+        "detail": "Rosy Berry,Hộp, Túi và Thiệp",
+        "weight": 350,
+        "display_id": null,
+        "brand_id": null,
+        "category_ids": [],
+        "barcode": null,
+        "images": [
+          "https://content.pancake.vn/2-2608/2026/8/2/459dea13ecea2f65f27200f06a8002a5bb08a546.jpg"
+        ],
+        "last_imported_price": 0,
+        "retail_price": 145000,
+        "avg_price": null,
+        "exact_price": null,
+        "is_upsale_product": null,
+        "measure_info": null,
+        "retail_price_original": null,
+        "tax_rate": null,
+        "product_display_id": null
+      },
+      "one_time_product": true,
+      "composite_item_id": null,
+      "discount_each_product": 0,
+      "exchange_count": 0,
+      "is_bonus_product": false,
+      "is_discount_percent": false,
+      "is_wholesale": false,
+      "returned_count": 0,
+      "return_quantity": 0,
+      "same_price_discount": 0
+    }
+  ],
+  "page": {
+    "id": "spo_1767439204",
+    "name": "Candlet Shop",
+    "username": "spo_CandletShop1785"
+  },
+  "time_assign_seller": "2026-08-02T23:38:40",
+  "botcake_info": null,
+  "return_fee": null,
+  "p_utm_medium": null,
+  "tracking_link": "https://order.pke.gg/tracking?id=gJ9Yp%2Fbt75Iorp4eSmT8HFQtC2NetMX878suQzajpy9LL%2F2cKxvmeve220xJjflED6dGzpZGdfBgGFBam%2Fy%2Br6Hy",
+  "prepaid": 0,
+  "customer_needs": [],
+  "customer": {
+    "emails": [],
+    "company_info": null,
+    "used_reward_point": 0,
+    "gender": "unknown",
+    "succeed_order_count": 0,
+    "user_block_id": null,
+    "order_count": 1,
+    "updated_at": "2026-08-02T23:35:12",
+    "returned_order_count": 0,
+    "list_voucher": [],
+    "level": null,
+    "conversation_link": "https://pancake.vn/spo_1767439204?customer_id=c98b9713-9270-4e60-8037-dc9cee848ac8",
+    "last_order_at": "2026-08-02T23:26:03",
+    "is_adjust_debts": null,
+    "current_debts": 0,
+    "customer_id": "c98b9713-9270-4e60-8037-dc9cee848ac8",
+    "pages_customers": null,
+    "count_referrals": 0,
+    "shop_id": 1022066910,
+    "conversation_tags": null,
+    "referral_code": "8c90yhKU",
+    "phone_numbers": [
+      "0****61"
+    ],
+    "is_discount_by_level": true,
+    "username": "phamxuantrung256",
+    "active_levera_pay": false,
+    "order_sources": [
+      "-3"
+    ],
+    "reward_point": 0,
+    "fb_id": "sp_497142797",
+    "creator_id": null,
+    "total_amount_referred": null,
+    "identity_code": null,
+    "notes": [],
+    "id": "570c3f06-6bbc-4a33-807f-56f1d7102069",
+    "name": "P******g",
+    "assigned_user_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+    "inserted_at": "2026-08-02T23:35:09",
+    "is_block": false,
+    "tags": [],
+    "date_of_birth": null,
+    "shop_customer_addresses": [
+      {
+        "id": "8c6d793f-5b2d-4146-88da-dd6775028512",
+        "address": "******",
+        "post_code": null,
+        "commune_id": "84_VN10130",
+        "country_code": 84,
+        "district_id": null,
+        "full_address": "******, Phường Tây Tựu, Hà Nội",
+        "province_id": "84_VN101",
+        "phone_number": "0****61",
+        "full_name": "P******g"
+      }
+    ],
+    "currency": "VND",
+    "purchased_amount": 0
+  },
+  "order_sources": "-3",
+  "is_live_shopping": false,
+  "p_utm_id": null,
+  "assigning_care": null,
+  "customer_pay_fee": true,
+  "p_utm_source": null,
+  "total_price": 145000,
+  "total_quantity": 1,
+  "system_id": 7,
+  "is_free_shipping": false,
+  "prepaid_by_point": {
+    "point": 0,
+    "money": 0
+  },
+  "cod": 151500,
+  "total_discount": 5000,
+  "payment_purchase_histories": [],
+  "pke_mkter": null,
+  "assigning_care_id": null,
+  "charged_by_momo": 0,
+  "partner_fee": 0,
+  "note": "Đơn huỷ trên hệ thống Shopee",
+  "id": "260803C0HMXW0K",
+  "activated_combo_products": [],
+  "status_name": "canceled",
+  "last_editor": null,
+  "partner": {
+    "updated_at": "2026-08-02T23:50:50",
+    "sort_code": null,
+    "cod": 0,
+    "paid_at": null,
+    "partner_id": 42,
+    "partner_status": "cancelled",
+    "total_fee": 0,
+    "system_created": null,
+    "extend_code": null,
+    "first_delivery_at": null,
+    "service_partner": null,
+    "printed_form": null,
+    "picked_up_at": null,
+    "extend_update": [],
+    "order_number_vtp": null,
+    "delivery_name": null,
+    "delivery_tel": null,
+    "custom_partner_id": null,
+    "partner_name": "Shopee Xpress",
+    "is_returned": null,
+    "is_ghn_v2": null,
+    "order_id_ghn": null,
+    "count_of_delivery": null
+  },
+  "link": null,
+  "money_to_collect": 151500,
+  "ad_id": null,
+  "bill_email": null,
+  "tax": 0,
+  "bill_phone_number": "0****61",
+  "inserted_at": "2026-08-02T23:35:09.000000",
+  "order_sources_name": "Shopee",
+  "shipping_address": {
+    "address": "******",
+    "commnue_name": "Phường Tây Tựu",
+    "commune_code_sicepat": null,
+    "commune_id": "84_VN10130",
+    "commune_name": "Phường Tây Tựu",
+    "country_code": "84",
+    "district_id": null,
+    "district_name": null,
+    "full_address": "******, Phường Tây Tựu, Hà Nội",
+    "full_name": "P******g",
+    "marketplace_address": "******, Phường Tây Tựu, Thành phố Hà Nội",
+    "new_commune_id": null,
+    "new_full_address": null,
+    "new_province_id": null,
+    "phone_number": "0****61",
+    "post_code": "",
+    "province_id": "84_VN101",
+    "province_name": "Hà Nội",
+    "render_type": "new"
+  },
+  "ads_source": null,
+  "warehouse_info": {
+    "name": "Kho mặc định",
+    "address": null,
+    "settings": null,
+    "commune_id": null,
+    "district_id": null,
+    "full_address": null,
+    "province_id": null,
+    "postcode": null,
+    "phone_number": null,
+    "custom_id": null,
+    "affiliate_id": null,
+    "ffm_id": null,
+    "has_snappy_service": false
+  },
+  "type": "orders",
+  "p_utm_term": null,
+  "duplicated_phone": null,
+  "tags": [],
+  "buyer_total_amount": 156500,
+  "account_name": "Candlet Shop",
+  "total_price_after_sub_discount": 151500,
+  "is_exchange_order": false,
+  "einvoices": null,
+  "p_utm_campaign": null,
+  "histories": [
+    {
+      "amount_owed": {
+        "new": 0,
+        "old": null
+      },
+      "amount_owed_to_customer": {
+        "new": 0,
+        "old": null
+      },
+      "assigning_seller_id": {
+        "new": "89aec528-f92d-4d9d-a14a-aede63247636",
+        "old": null
+      },
+      "bank_payments": {
+        "new": {},
+        "old": null
+      },
+      "discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "is_customer_level": {
+        "new": false,
+        "old": null
+      },
+      "is_reward_point": {
+        "new": true,
+        "old": null
+      },
+      "surcharges": {
+        "new": {},
+        "old": null
+      },
+      "time_assign_seller": {
+        "new": "2026-08-02T23:38:40",
+        "old": null
+      },
+      "updated_at": "2026-08-02T23:38:40"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "total_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "updated_at": "2026-08-02T23:38:40"
+    },
+    {
+      "discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "editor_id": null,
+      "shopee_status": {
+        "new": "READY_TO_SHIP",
+        "old": "UNPAID"
+      },
+      "status": {
+        "new": 1,
+        "old": 0
+      },
+      "updated_at": "2026-08-02T23:40:13"
+    },
+    {
+      "editor_id": null,
+      "general_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "total_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "updated_at": "2026-08-02T23:40:13"
+    },
+    {
+      "discount": {
+        "new": 500,
+        "old": 5000
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "updated_at": "2026-08-02T23:41:33"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 500,
+        "old": 5000
+      },
+      "total_discount": {
+        "new": 500,
+        "old": 5000
+      },
+      "updated_at": "2026-08-02T23:41:33"
+    },
+    {
+      "discount": {
+        "new": 5000,
+        "old": 500
+      },
+      "editor_id": null,
+      "updated_at": "2026-08-02T23:44:39"
+    },
+    {
+      "editor_id": null,
+      "general_discount": {
+        "new": 5000,
+        "old": 500
+      },
+      "total_discount": {
+        "new": 5000,
+        "old": 500
+      },
+      "updated_at": "2026-08-02T23:44:39"
+    },
+    {
+      "discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "updated_at": "2026-08-02T23:49:48"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "total_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "updated_at": "2026-08-02T23:49:48"
+    },
+    {
+      "discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "updated_at": "2026-08-02T23:50:14"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "total_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "updated_at": "2026-08-02T23:50:14"
+    },
+    {
+      "editor_id": null,
+      "note": {
+        "new": "Yêu cầu 260803C0HMXW0K huỷ đơn hàng...",
+        "old": null
+      },
+      "updated_at": "2026-08-02T23:50:49"
+    },
+    {
+      "editor_id": null,
+      "note": {
+        "new": "Yêu cầu 260803C0HMXW0K huỷ đơn hàng \n Đơn huỷ trên hệ thống Shopee...",
+        "old": "Yêu cầu 260803C0HMXW0K huỷ đơn hàng..."
+      },
+      "shopee_status": {
+        "new": "CANCELLED",
+        "old": "READY_TO_SHIP"
+      },
+      "status": {
+        "new": 6,
+        "old": 1
+      },
+      "updated_at": "2026-08-02T23:50:50"
+    },
+    {
+      "advanced_platform_fee": {
+        "new": {
+          "marketplace_promotion": [
+            "CANDSC2"
+          ],
+          "payment_fee": 0,
+          "seller_transaction_fee": 0
+        },
+        "old": {
+          "diff_shipping_fee": 16500,
+          "marketplace_promotion": [
+            "CANDSC2"
+          ],
+          "payment_fee": 18200,
+          "seller_transaction_fee": 9390,
+          "service_fee": 10700,
+          "tax": 2100
+        }
+      },
+      "discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "editor_id": null,
+      "fee_marketplace": {
+        "new": 0,
+        "old": 40390
+      },
+      "note": {
+        "new": null,
+        "old": "Yêu cầu 260803C0HMXW0K huỷ đơn hàng \n Đơn huỷ trên hệ thống Shopee..."
+      },
+      "shipping_fee": {
+        "new": 11500,
+        "old": 0
+      },
+      "shopee_status": {
+        "new": "IN_CANCEL",
+        "old": "CANCELLED"
+      },
+      "updated_at": "2026-08-02T23:50:51"
+    },
+    {
+      "editor_id": null,
+      "general_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "total_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "updated_at": "2026-08-02T23:50:51"
+    },
+    {
+      "discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "updated_at": "2026-08-02T23:53:40"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "total_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "updated_at": "2026-08-02T23:53:40"
+    },
+    {
+      "discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "updated_at": "2026-08-02T23:56:44"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "total_discount": {
+        "new": 0,
+        "old": 5000
+      },
+      "updated_at": "2026-08-02T23:56:45"
+    },
+    {
+      "discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "updated_at": "2026-08-02T23:57:57"
+    },
+    {
+      "editor_id": "89aec528-f92d-4d9d-a14a-aede63247636",
+      "general_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "total_discount": {
+        "new": 5000,
+        "old": 0
+      },
+      "updated_at": "2026-08-02T23:57:57"
+    },
+    {
+      "editor_id": null,
+      "note": {
+        "new": "Đơn huỷ trên hệ thống Shopee...",
+        "old": null
+      },
+      "shopee_status": {
+        "new": "CANCELLED",
+        "old": "IN_CANCEL"
+      },
+      "updated_at": "2026-08-03T00:19:01"
+    }
+  ],
+  "is_livestream": false,
+  "post_id": null
+}

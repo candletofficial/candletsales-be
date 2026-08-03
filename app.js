@@ -17,6 +17,7 @@ const couponRoutes = require('./routes/couponRoutes');
 const fundRoutes = require('./routes/fundRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 const app = express();
 
 // ── Middlewares ──────────────────────────────────────────────────
@@ -43,6 +44,7 @@ app.use('/api/coupons', couponRoutes);
 app.use('/api/funds', fundRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

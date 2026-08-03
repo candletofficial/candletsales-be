@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const orderItemSchema = new mongoose.Schema({
   // Snapshot thông tin sản phẩm tại thời điểm đặt hàng
-  product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
-  productId: { type: String, required: true },     // mã sản phẩm VD: SP-1234567
+  product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+  productId: { type: String },     // mã sản phẩm VD: SP-1234567
   product_name: { type: String, required: true },
   product_image: { type: String, default: null },
   sku_id: { type: String, default: null },         // null nếu là sản phẩm không có phân loại
@@ -19,6 +19,7 @@ const orderSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
+  pancake_order_id: { type: String, default: null }, // To prevent duplicates
   items: {
     type: [orderItemSchema],
     default: [],
