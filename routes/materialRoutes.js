@@ -14,6 +14,10 @@ router.route('/')
   .get(materialController.getMaterials)
   .post(materialController.createMaterial);
 
+// Phải đặt trước /:id để không bị nhầm category thành id
+router.route('/category/:categoryName')
+  .delete(materialController.deleteCategory);
+
 router.route('/:id')
   .put(materialController.updateMaterial)
   .delete(materialController.deleteMaterial);

@@ -32,7 +32,8 @@ exports.createTicket = async (req, res) => {
         material_id: material._id,
         system_stock: material.actualStock,
         actual_stock: actual_stock,
-        difference: diff
+        difference: diff,
+        price: material.price || 0
       });
 
       // Update material actual stock
@@ -82,3 +83,5 @@ exports.getTickets = async (req, res) => {
     res.status(500).json({ success: false, message: 'Lỗi server' });
   }
 };
+
+// removed syncInventory

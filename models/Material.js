@@ -6,6 +6,11 @@ const materialSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  category: {
+    type: String,
+    required: false,
+    trim: true,
+  },
   sku: {
     type: String,
     required: true,

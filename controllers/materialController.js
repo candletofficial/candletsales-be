@@ -125,3 +125,23 @@ exports.deleteMaterial = async (req, res, next) => {
     next(error);
   }
 };
+
+// Xóa một phân loại khỏi tất cả nguyên vật liệu
+exports.deleteCategory = async (req, res, next) => {
+  try {
+    const categoryName = req.params.categoryName;
+    if (!categoryName) {
+      return res.status(400).json({ success: false, message: 'Thiếu tên phân loại' });
+    }
+    
+    // Cập nhật tất cả nguyên vật liệu có categoryName này thành rỗng
+    const result = await Material.updateMany(
+      { category: categoryName },
+      { $unset: { category: 1 } }
+    );
+    
+    res.status(200).json({ success: true, message: 'Đã xóa phân loại', modifiedCount: result.modifiedCount });
+  } catch (error) {
+    next(error);
+  }
+};
