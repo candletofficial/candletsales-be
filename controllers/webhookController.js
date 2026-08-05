@@ -100,11 +100,17 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         const FundTransaction = require('../models/FundTransaction');
         
         // Calculate new amount for transaction log
-        const finalAmount = (payload.cash || 0) + 
-                            (payload.transfer_money || 0) + 
-                            (payload.charged_by_card || 0) + 
-                            (payload.money_to_collect || payload.cod || 0);
-        const newOrderAmount = finalAmount > 0 ? finalAmount : (payload.buyer_total_amount || payload.total_price_after_sub_discount || 0);
+        // Với đơn marketplace (Shopee, TikTok,...): "Tiền cần thu" = (Tổng - Giảm giá) - Phí sàn
+        // Với đơn trực tiếp (Facebook, offline): dùng cash/transfer/cod
+        const calcOrderAmount = (p) => {
+          const feeMarketplace = p.fee_marketplace || 0;
+          if (feeMarketplace > 0) {
+            return Math.max(0, (p.total_price || 0) - (p.total_discount || 0) - feeMarketplace);
+          }
+          const directAmount = (p.cash || 0) + (p.transfer_money || 0) + (p.charged_by_card || 0) + (p.money_to_collect || p.cod || 0);
+          return directAmount > 0 ? directAmount : (p.buyer_total_amount || p.total_price_after_sub_discount || 0);
+        };
+        const newOrderAmount = calcOrderAmount(payload);
         const revenueAmount = newOrderAmount > 0 ? newOrderAmount : existingOrder.total_price;
 
         await FundTransaction.create({
@@ -123,11 +129,16 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       // Đơn đã được xác nhận "đã thu tiền" sẽ chỉ thay đổi khi bị "hoàn" chính thức
 
       // Check if total_price changed
-      const finalAmount = (payload.cash || 0) + 
-                          (payload.transfer_money || 0) + 
-                          (payload.charged_by_card || 0) + 
-                          (payload.money_to_collect || payload.cod || 0);
-      const newOrderAmount = finalAmount > 0 ? finalAmount : (payload.buyer_total_amount || payload.total_price_after_sub_discount || 0);
+      // Với đơn marketplace (Shopee, TikTok,...): "Tiền cần thu" = (Tổng - Giảm giá) - Phí sàn
+      const calcOrderAmountUpdate = (p) => {
+        const feeMarketplace = p.fee_marketplace || 0;
+        if (feeMarketplace > 0) {
+          return Math.max(0, (p.total_price || 0) - (p.total_discount || 0) - feeMarketplace);
+        }
+        const directAmount = (p.cash || 0) + (p.transfer_money || 0) + (p.charged_by_card || 0) + (p.money_to_collect || p.cod || 0);
+        return directAmount > 0 ? directAmount : (p.buyer_total_amount || p.total_price_after_sub_discount || 0);
+      };
+      const newOrderAmount = calcOrderAmountUpdate(payload);
 
       if (newOrderAmount > 0 && existingOrder.total_price !== newOrderAmount) {
         console.log(`Order ${payload.id} amount changed from ${existingOrder.total_price} to ${newOrderAmount}. Updating...`);
@@ -205,6 +216,23 @@ exports.handlePancakeWebhook = async (req, res, next) => {
 
       console.log(`Order ${payload.id} already exists. Skipping creation.`);
       return res.status(200).json({ success: true, message: 'Order already exists' });
+    }
+
+    // Guard: nếu đơn chưa có trong DB nhưng đã bị hủy/hoàn → bỏ qua, không tạo mới
+    const statusNameNew = (payload.status_name || '').toLowerCase();
+    const isCancelledNew = payload.status === 7 || payload.status === 9 ||
+      statusNameNew.includes('huỷ') ||
+      statusNameNew.includes('hủy') ||
+      statusNameNew.includes('cancel') ||
+      (payload.partner && payload.partner.partner_status === 'cancelled');
+    const isReturnedNew = statusNameNew.includes('đã hoàn') || statusNameNew === 'hoàn' ||
+      statusNameNew.includes('hoàn hàng') || statusNameNew.includes('chuyển hoàn') ||
+      statusNameNew.includes('returned') ||
+      (payload.partner && payload.partner.partner_status === 'returned');
+
+    if (isCancelledNew || isReturnedNew) {
+      console.log(`Order ${payload.id} is cancelled/returned but not in DB. Skipping creation.`);
+      return res.status(200).json({ success: true, message: 'Ignored: Cancelled or returned order not in DB' });
     }
 
     const allProducts = await Product.find().populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
@@ -377,12 +405,19 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     }
 
     // Calculate the final actual amount received/to be collected
-    const finalAmount = (payload.cash || 0) + 
-                        (payload.transfer_money || 0) + 
-                        (payload.charged_by_card || 0) + 
-                        (payload.money_to_collect || payload.cod || 0);
-
-    const orderAmount = finalAmount > 0 ? finalAmount : (payload.buyer_total_amount || payload.total_price_after_sub_discount || 0);
+    // Với đơn marketplace (Shopee, TikTok,...): "Tiền cần thu" = (Tổng - Giảm giá) - Phí sàn → khớp Pancake
+    // Với đơn trực tiếp (Facebook, offline): dùng cash/transfer/cod
+    const feeMarketplace = payload.fee_marketplace || 0;
+    let orderAmount;
+    if (feeMarketplace > 0) {
+      orderAmount = Math.max(0, (payload.total_price || 0) - (payload.total_discount || 0) - feeMarketplace);
+    } else {
+      const finalAmount = (payload.cash || 0) +
+                          (payload.transfer_money || 0) +
+                          (payload.charged_by_card || 0) +
+                          (payload.money_to_collect || payload.cod || 0);
+      orderAmount = finalAmount > 0 ? finalAmount : (payload.buyer_total_amount || payload.total_price_after_sub_discount || 0);
+    }
 
     // Determine order date
     // Pancake uses inserted_at or created_at for the order. Sometimes they are at the root level.
