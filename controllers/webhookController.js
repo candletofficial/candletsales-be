@@ -7,25 +7,25 @@ const { buildMaterialDeductions } = require('./orderController');
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
 
 /**
- * Kiểm tra xem đơn hàng có được xác nhận là "Đã thu tiền / Hoàn thành" hay không.
+ * Kiểm tra xem đơn hàng có được xác nhận là "Đã thu tiền / Đã đối soát" hay không.
  * Áp dụng cho cả đợt tạo mới và cập nhật đơn hàng từ Pancake webhook.
  *
- * Logic:
- * 1. status=16 (Pancake "Đã thu tiền" / Collected money)
- * 2. status_name chứa các từ khóa hoàn thành
- * 3. histories[] có shopee_status.new = 'COMPLETED' (dành riêng cho đơn Shopee:
- *    Shopee đánh dấu COMPLETED nhưng Pancake không tự chuyển sang status=16)
+ * Timeline Shopee:
+ *   COMPLETED (shopee_status) = khách xác nhận nhận hàng, nhưng Shopee VẪN GIỮ TIỀN (3-15 ngày)
+ *   status=16 "Đã đối soát"   = Shopee thực sự chuyển tiền vào tài khoản → MỚI là hoàn thành
  *
- * NOTE: status=3 (Received) chưa phải hoàn thành — khách nhận hàng nhưng chưa đối soát.
- * NOTE: status=8 (Packaging) — đóng gói, hoàn toàn không phải hoàn thành.
+ * NOTE: status=3 (Received / TO_CONFIRM_RECEIVE) — chưa nhận tiền.
+ * NOTE: status=8 (Packaging) — đóng gói, không phải hoàn thành.
+ * NOTE: shopee_status=COMPLETED — KHÔNG phải đã nhận tiền, chỉ là đơn xong phía khách hàng.
  */
 const checkIsCompleted = (payload) => {
   const statusName = (payload.status_name || '').toLowerCase();
 
-  // 1. Pancake status code 16 = Collected money
+  // 1. Pancake status code 16 = "Đã đối soát" / Collected money
+  //    Đây là thời điểm Shopee/sàn thực sự chuyển tiền → mới tính doanh thu
   if (payload.status === 16) return true;
 
-  // 2. status_name keywords
+  // 2. status_name keywords (dùng cho các nguồn khác: Facebook, offline, TikTok...)
   if (
     statusName.includes('đã thu tiền') ||
     statusName.includes('hoàn thành') ||
@@ -36,13 +36,8 @@ const checkIsCompleted = (payload) => {
     statusName === 'paid'
   ) return true;
 
-  // 3. Shopee: kiểm tra histories[] có shopee_status.new = 'COMPLETED'
-  // Pancake không tự chuyển status=16 cho đơn Shopee sau khi đối soát
-  const histories = payload.histories || [];
-  const shopeeCompleted = histories.some(
-    h => h.shopee_status && h.shopee_status.new === 'COMPLETED'
-  );
-  if (shopeeCompleted) return true;
+  // NOTE: KHÔNG check shopee_status=COMPLETED vì đó chỉ là khách xác nhận nhận hàng,
+  // Shopee vẫn đang giữ tiền, chưa đối soát. Chỉ status=16 mới là tiền thực sự về.
 
   return false;
 };
