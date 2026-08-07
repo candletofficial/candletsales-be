@@ -24,7 +24,8 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     if (existingOrder) {
       // Check if order is cancelled
       const statusName = (payload.status_name || '').toLowerCase();
-      const isCancelled = payload.status === 7 || payload.status === 9 || 
+      // status 7 = Cancelled. status 9 = Waiting for pick up (KHÔNG phải cancelled)
+      const isCancelled = payload.status === 7 || 
         statusName.includes('huỷ') || 
         statusName.includes('hủy') || 
         statusName.includes('cancel') ||
@@ -64,7 +65,9 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       }
 
       // Check if order is returned
-      const isReturned = statusName.includes('đã hoàn') || statusName === 'hoàn' || statusName.includes('hoàn hàng') || statusName.includes('chuyển hoàn') || statusName.includes('returned') || (payload.partner && payload.partner.partner_status === 'returned');
+      // status 5 = Returned, status 4 = Returning
+      const isReturned = payload.status === 5 || payload.status === 4 ||
+        statusName.includes('đã hoàn') || statusName === 'hoàn' || statusName.includes('hoàn hàng') || statusName.includes('chuyển hoàn') || statusName.includes('returned') || (payload.partner && payload.partner.partner_status === 'returned');
       
       if (isReturned && existingOrder.status !== 'returned') {
         console.log(`Order ${payload.id} is returned on Pancake. Marking as returned...`);
@@ -83,15 +86,17 @@ exports.handlePancakeWebhook = async (req, res, next) => {
 
       // Check if order became completed from pending
       const isCompleted = 
-        payload.status === 8 || payload.status === 16 ||
+        payload.status === 16 || // 16 = Collected money (Đã thu tiền)
         statusName.includes('đã thu tiền') || 
         statusName.includes('hoàn thành') || 
         statusName.includes('đã đối soát') ||
         statusName === 'received_money' ||
         statusName === 'completed' ||
         statusName === 'done' ||
-        statusName === 'paid' ||
-        statusName === 'delivered';
+        statusName === 'paid';
+        // NOTE: status 8 = Packaging (Đóng gói), KHÔNG phải Collected money.
+        // status 3 = Received (Đã nhận hàng) nhưng chưa thu tiền COD → vẫn là 'pending'.
+        // Chỉ status=16 (Collected money) mới là hoàn thành thực sự.
       if (isCompleted && existingOrder.status === 'pending') {
         console.log(`Order ${payload.id} is now completed. Marking as completed...`);
         existingOrder.status = 'completed';
@@ -220,12 +225,15 @@ exports.handlePancakeWebhook = async (req, res, next) => {
 
     // Guard: nếu đơn chưa có trong DB nhưng đã bị hủy/hoàn → bỏ qua, không tạo mới
     const statusNameNew = (payload.status_name || '').toLowerCase();
-    const isCancelledNew = payload.status === 7 || payload.status === 9 ||
+    // status 7 = Cancelled. status 9 = Waiting for pick up (KHÔNG phải cancelled)
+    const isCancelledNew = payload.status === 7 ||
       statusNameNew.includes('huỷ') ||
       statusNameNew.includes('hủy') ||
       statusNameNew.includes('cancel') ||
       (payload.partner && payload.partner.partner_status === 'cancelled');
-    const isReturnedNew = statusNameNew.includes('đã hoàn') || statusNameNew === 'hoàn' ||
+    // status 5 = Returned, status 4 = Returning
+    const isReturnedNew = payload.status === 5 || payload.status === 4 ||
+      statusNameNew.includes('đã hoàn') || statusNameNew === 'hoàn' ||
       statusNameNew.includes('hoàn hàng') || statusNameNew.includes('chuyển hoàn') ||
       statusNameNew.includes('returned') ||
       (payload.partner && payload.partner.partner_status === 'returned');
@@ -448,15 +456,17 @@ exports.handlePancakeWebhook = async (req, res, next) => {
 
     const statusName = (payload.status_name || '').toLowerCase();
     const isCompleted = 
-      payload.status === 8 || payload.status === 16 ||
+      payload.status === 16 || // 16 = Collected money (Đã thu tiền)
       statusName.includes('đã thu tiền') || 
       statusName.includes('hoàn thành') || 
       statusName.includes('đã đối soát') ||
       statusName === 'received_money' ||
       statusName === 'completed' ||
       statusName === 'done' ||
-      statusName === 'paid' ||
-      statusName === 'delivered';
+      statusName === 'paid';
+      // NOTE: status 8 = Packaging (Đóng gói), KHÔNG phải Collected money.
+      // status 3 = Received (Đã nhận hàng) nhưng chưa thu tiền COD → vẫn là 'pending'.
+      // Chỉ status=16 (Collected money) mới là hoàn thành thực sự.
     const initialStatus = isCompleted ? 'completed' : 'pending';
 
     const order = new Order({
