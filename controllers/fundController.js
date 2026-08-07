@@ -88,9 +88,9 @@ exports.getSummary = async (req, res) => {
       netDeposit: item.netDeposit
     }));
 
-    // 4. Tính tổng nợ phiếu nhập chưa tất toán (payment_status = 'unsettled')
+    // 4. Tính tổng nợ phiếu nhập chưa tất toán (payment_status = 'unsettled' hoặc không có)
     const importDebtAgg = await ImportTicket.aggregate([
-      { $match: { payment_status: 'unsettled' } },
+      { $match: { payment_status: { $ne: 'settled' } } },
       { $group: { _id: null, totalDebt: { $sum: '$total_amount' } } }
     ]);
     const totalImportDebt = importDebtAgg.length > 0 ? importDebtAgg[0].totalDebt : 0;
