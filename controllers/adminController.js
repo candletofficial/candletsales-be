@@ -230,14 +230,7 @@ exports.getDashboardStats = async (req, res) => {
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
       InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
       FundTransaction.find({}).sort({ createdAt: -1 }).limit(5),
-      AffiliateFee.find({
-        $or: [
-          { year: startOfCurrentPeriod.getFullYear(), month: startOfCurrentPeriod.getMonth() + 1 },
-          { year: endOfPeriod.getFullYear(), month: endOfPeriod.getMonth() + 1 },
-          { year: startOfPrevPeriod.getFullYear(), month: startOfPrevPeriod.getMonth() + 1 },
-          { year: endOfPrevPeriod.getFullYear(), month: endOfPrevPeriod.getMonth() + 1 }
-        ]
-      })
+      AffiliateFee.find({})
     ]);
 
     // 1. Calculate main metrics
@@ -260,20 +253,38 @@ exports.getDashboardStats = async (req, res) => {
     const adPrevTotal = adsPrev.reduce((sum, a) => sum + a.amount, 0);
     const adCostGrowth = adPrevTotal === 0 ? null : ((adCurrentTotal - adPrevTotal) / adPrevTotal * 100);
 
-    // Prorate affiliate fees based on the number of days in the period
-    const prorateFactor = days / 30;
-    
-    // Calculate current period affiliate fee
-    const endMonth = endOfPeriod.getMonth() + 1;
-    const endYear = endOfPeriod.getFullYear();
-    const currentFees = affiliateFees.filter(f => f.month === endMonth && f.year === endYear);
-    const affiliateFeeCurrentTotal = currentFees.reduce((sum, a) => sum + (a.amount * prorateFactor), 0);
+    // Calculate exact affiliate fee for a date range
+    const calculateExactAffiliateFee = (start, end) => {
+      let totalFee = 0;
+      const platformFees = {};
+      
+      let iter = new Date(start);
+      // to avoid infinite loop on edge cases, limit to reasonable days
+      let safeGuard = 0;
+      while (iter <= end && safeGuard < 5000) {
+        const m = iter.getMonth() + 1;
+        const y = iter.getFullYear();
+        const daysInMonth = new Date(y, m, 0).getDate();
+        
+        const monthlyFees = affiliateFees.filter(f => f.month === m && f.year === y);
+        monthlyFees.forEach(f => {
+           const dailyAmount = (f.amount || 0) / daysInMonth;
+           totalFee += dailyAmount;
+           const plat = f.platform || 'khác';
+           platformFees[plat] = (platformFees[plat] || 0) + dailyAmount;
+        });
+        
+        iter.setDate(iter.getDate() + 1);
+        safeGuard++;
+      }
+      return { totalFee, platformFees };
+    };
 
-    // Calculate previous period affiliate fee
-    const prevMonth = endOfPrevPeriod.getMonth() + 1;
-    const prevYear = endOfPrevPeriod.getFullYear();
-    const prevFees = affiliateFees.filter(f => f.month === prevMonth && f.year === prevYear);
-    const affiliateFeePrevTotal = prevFees.reduce((sum, a) => sum + (a.amount * prorateFactor), 0);
+    const currentAffiliateData = calculateExactAffiliateFee(startOfCurrentPeriod, endOfPeriod);
+    const affiliateFeeCurrentTotal = currentAffiliateData.totalFee;
+    
+    const prevAffiliateData = calculateExactAffiliateFee(startOfPrevPeriod, endOfPrevPeriod);
+    const affiliateFeePrevTotal = prevAffiliateData.totalFee;
 
     const normalCompletedCurrent = activeCurrent.filter(o => !o.is_replacement && !o.is_seeding);
     const replacementCurrent = activeCurrent.filter(o => o.is_replacement);
@@ -386,13 +397,12 @@ exports.getDashboardStats = async (req, res) => {
       }
     });
 
-    currentFees.forEach(a => {
-      const src = a.platform || 'khác';
-      if (a.amount && a.amount > 0) {
+    Object.entries(currentAffiliateData.platformFees).forEach(([src, amount]) => {
+      if (amount > 0) {
         if (!platformMap[src]) {
           platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0, affiliate_fee: 0 };
         }
-        platformMap[src].affiliate_fee = (platformMap[src].affiliate_fee || 0) + (a.amount * prorateFactor);
+        platformMap[src].affiliate_fee = (platformMap[src].affiliate_fee || 0) + amount;
       }
     });
 
