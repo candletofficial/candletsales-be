@@ -1,5 +1,6 @@
 const FundTransaction = require('../models/FundTransaction');
 const Order = require('../models/Order');
+const ImportTicket = require('../models/ImportTicket');
 const mongoose = require('mongoose');
 
 const PLATFORMS = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
@@ -87,12 +88,20 @@ exports.getSummary = async (req, res) => {
       netDeposit: item.netDeposit
     }));
 
+    // 4. Calculate total import debt (phiếu nhập chưa tất toán)
+    const importDebtAgg = await ImportTicket.aggregate([
+      { $match: { payment_status: 'unsettled', status: 'completed' } },
+      { $group: { _id: null, totalDebt: { $sum: '$total_amount' } } }
+    ]);
+    const totalImportDebt = importDebtAgg.length > 0 ? importDebtAgg[0].totalDebt : 0;
+
     res.json({
       success: true,
       data: {
         totalFundBalance,
         platformBalances,
-        adminDeposits
+        adminDeposits,
+        totalImportDebt
       }
     });
   } catch (error) {
