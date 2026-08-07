@@ -88,9 +88,11 @@ exports.getSummary = async (req, res) => {
       netDeposit: item.netDeposit
     }));
 
-    // 4. Calculate total import debt (phiếu nhập chưa tất toán)
+    // 4. Calculate total import debt (phiếu nhập chưa tất toán — cả pending lẫn completed)
+    // pending  = hàng chưa về kho nhưng đã tạo phiếu → vẫn là khoản nợ
+    // completed = hàng đã về kho nhưng chưa thanh toán → chắc chắn là nợ
     const importDebtAgg = await ImportTicket.aggregate([
-      { $match: { payment_status: 'unsettled', status: 'completed' } },
+      { $match: { payment_status: 'unsettled' } },
       { $group: { _id: null, totalDebt: { $sum: '$total_amount' } } }
     ]);
     const totalImportDebt = importDebtAgg.length > 0 ? importDebtAgg[0].totalDebt : 0;
