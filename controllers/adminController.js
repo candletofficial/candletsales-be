@@ -361,7 +361,8 @@ exports.getDashboardStats = async (req, res) => {
     const costStructure = {
       ads: totalCostForStructure > 0 ? (totalAds / totalCostForStructure * 100) : 0,
       inventory: totalCostForStructure > 0 ? (totalCOGS / totalCostForStructure * 100) : 0,
-      logistics: totalCostForStructure > 0 ? (totalLogisticsAndReturns / totalCostForStructure * 100) : 0
+      logistics: totalCostForStructure > 0 ? (totalLogisticsAndReturns / totalCostForStructure * 100) : 0,
+      affiliate: totalCostForStructure > 0 ? (totalAffiliate / totalCostForStructure * 100) : 0
     };
 
 
@@ -587,6 +588,7 @@ exports.getDashboardStats = async (req, res) => {
         inventoryGrowth: null, // Not tracking history for now
         adCost: adCurrentTotal,
         adCostGrowth: adCostGrowth !== null ? Number(adCostGrowth.toFixed(1)) : null,
+        affiliateFee: affiliateFeeCurrentTotal,
         realProfit: realProfitCurrent,
         realProfitGrowth: realProfitGrowth !== null ? Number(realProfitGrowth.toFixed(1)) : null,
         returnedOrders: returnedCurrent.length,
