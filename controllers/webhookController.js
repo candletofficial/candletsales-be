@@ -6,6 +6,48 @@ const { buildMaterialDeductions } = require('./orderController');
 // Helper to generate a random order ID
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
 
+/**
+ * Kiểm tra xem đơn hàng có được xác nhận là "Đã thu tiền / Hoàn thành" hay không.
+ * Áp dụng cho cả đợt tạo mới và cập nhật đơn hàng từ Pancake webhook.
+ *
+ * Logic:
+ * 1. status=16 (Pancake "Đã thu tiền" / Collected money)
+ * 2. status_name chứa các từ khóa hoàn thành
+ * 3. histories[] có shopee_status.new = 'COMPLETED' (dành riêng cho đơn Shopee:
+ *    Shopee đánh dấu COMPLETED nhưng Pancake không tự chuyển sang status=16)
+ *
+ * NOTE: status=3 (Received) chưa phải hoàn thành — khách nhận hàng nhưng chưa đối soát.
+ * NOTE: status=8 (Packaging) — đóng gói, hoàn toàn không phải hoàn thành.
+ */
+const checkIsCompleted = (payload) => {
+  const statusName = (payload.status_name || '').toLowerCase();
+
+  // 1. Pancake status code 16 = Collected money
+  if (payload.status === 16) return true;
+
+  // 2. status_name keywords
+  if (
+    statusName.includes('đã thu tiền') ||
+    statusName.includes('hoàn thành') ||
+    statusName.includes('đã đối soát') ||
+    statusName === 'received_money' ||
+    statusName === 'completed' ||
+    statusName === 'done' ||
+    statusName === 'paid'
+  ) return true;
+
+  // 3. Shopee: kiểm tra histories[] có shopee_status.new = 'COMPLETED'
+  // Pancake không tự chuyển status=16 cho đơn Shopee sau khi đối soát
+  const histories = payload.histories || [];
+  const shopeeCompleted = histories.some(
+    h => h.shopee_status && h.shopee_status.new === 'COMPLETED'
+  );
+  if (shopeeCompleted) return true;
+
+  return false;
+};
+
+
 exports.handlePancakeWebhook = async (req, res, next) => {
   try {
     const payload = req.body;
@@ -85,18 +127,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       let updated = false;
 
       // Check if order became completed from pending
-      const isCompleted = 
-        payload.status === 16 || // 16 = Collected money (Đã thu tiền)
-        statusName.includes('đã thu tiền') || 
-        statusName.includes('hoàn thành') || 
-        statusName.includes('đã đối soát') ||
-        statusName === 'received_money' ||
-        statusName === 'completed' ||
-        statusName === 'done' ||
-        statusName === 'paid';
-        // NOTE: status 8 = Packaging (Đóng gói), KHÔNG phải Collected money.
-        // status 3 = Received (Đã nhận hàng) nhưng chưa thu tiền COD → vẫn là 'pending'.
-        // Chỉ status=16 (Collected money) mới là hoàn thành thực sự.
+      const isCompleted = checkIsCompleted(payload);
       if (isCompleted && existingOrder.status === 'pending') {
         console.log(`Order ${payload.id} is now completed. Marking as completed...`);
         existingOrder.status = 'completed';
@@ -455,18 +486,11 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     }
 
     const statusName = (payload.status_name || '').toLowerCase();
-    const isCompleted = 
-      payload.status === 16 || // 16 = Collected money (Đã thu tiền)
-      statusName.includes('đã thu tiền') || 
-      statusName.includes('hoàn thành') || 
-      statusName.includes('đã đối soát') ||
-      statusName === 'received_money' ||
-      statusName === 'completed' ||
-      statusName === 'done' ||
-      statusName === 'paid';
-      // NOTE: status 8 = Packaging (Đóng gói), KHÔNG phải Collected money.
-      // status 3 = Received (Đã nhận hàng) nhưng chưa thu tiền COD → vẫn là 'pending'.
-      // Chỉ status=16 (Collected money) mới là hoàn thành thực sự.
+    const isCompleted = checkIsCompleted(payload);
+      // checkIsCompleted kiểm tra:
+      // - status=16 (Collected money)
+      // - status_name chứa từ khoá hoàn thành
+      // - histories[].shopee_status.new = 'COMPLETED' (dành cho đơn Shopee)
     const initialStatus = isCompleted ? 'completed' : 'pending';
 
     const order = new Order({
