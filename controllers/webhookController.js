@@ -412,13 +412,29 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         }
       }
 
+      // Construct real SKU label from our database if matched
+      let realSkuLabel = shopeeSku;
+      if (matchedProduct && matchedSkuId) {
+        const skuObj = (matchedProduct.skus || []).find(s => s.id === matchedSkuId);
+        if (skuObj && skuObj.combination) {
+          const labels = skuObj.combination.map(optId => {
+            for (const vg of (matchedProduct.variant_groups || [])) {
+              const opt = (vg.options || []).find(o => o.id === optId);
+              if (opt && opt.label) return opt.label;
+            }
+            return optId;
+          });
+          realSkuLabel = labels.join(' - ');
+        }
+      }
+
       orderItems.push({
         product_id: matchedProduct ? matchedProduct._id : null,
         productId: matchedProduct ? matchedProduct.productId : 'UNKNOWN_SHOPEE',
         product_name: matchedProduct ? matchedProduct.name : shopeeName,
         product_image: matchedProduct ? matchedProduct.image : null,
         sku_id: matchedSkuId, // Use the matched SKU ID if found
-        sku_label: shopeeSku,
+        sku_label: realSkuLabel, // Use our app's label instead of Pancake's
         unit_price: item.variation_info?.retail_price || 0,
         unit_cost: unit_cost,
         quantity: item.quantity || 1
