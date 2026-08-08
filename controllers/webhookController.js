@@ -357,12 +357,25 @@ exports.handlePancakeWebhook = async (req, res, next) => {
           }
         }
         
-        // 4b. If still not found, try to match by sku label
+        // 4b. If still not found, try to match by sku label from variant_groups
         if (!matchedSkuId) {
           for (const s of matchedProduct.skus) {
-            if (s.label && variationDetailLower.includes(s.label.toLowerCase())) {
-              matchedSkuId = s.id;
-              break;
+            let skuLabels = [];
+            if (s.combination) {
+              for (const optId of s.combination) {
+                for (const vg of (matchedProduct.variant_groups || [])) {
+                  const opt = (vg.options || []).find(o => o.id === optId);
+                  if (opt && opt.label) skuLabels.push(opt.label.toLowerCase());
+                }
+              }
+            }
+            
+            if (skuLabels.length > 0) {
+              const allLabelsMatch = skuLabels.every(lbl => variationDetailLower.includes(lbl));
+              if (allLabelsMatch) {
+                matchedSkuId = s.id;
+                break;
+              }
             }
           }
         }
