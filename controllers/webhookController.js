@@ -281,58 +281,43 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       let matchedProduct = null;
       let matchedSkuId = null;
 
-      // 1. Try to match EXACTLY by SKU Code
-      if (shopeeSkuCode) {
-        const skuCodeUpper = String(shopeeSkuCode).toUpperCase();
+      const namePrefix = shopeeName.includes('-') ? shopeeName.split('-')[0].trim().toUpperCase() : '';
+
+      const findExactMatch = (codeToMatch) => {
+        if (!codeToMatch) return false;
+        const code = String(codeToMatch).toUpperCase();
+        
+        // Ưu tiên tìm chính xác theo SKU ID trước
         for (const p of allProducts) {
           if (p.skus && p.skus.length > 0) {
-            const foundSku = p.skus.find(s => s.id && s.id.toUpperCase() === skuCodeUpper);
+            const foundSku = p.skus.find(s => s.id && s.id.toUpperCase() === code);
             if (foundSku) {
               matchedProduct = p;
               matchedSkuId = foundSku.id;
-              break;
+              return true;
             }
           }
-          if (!matchedProduct && p.productId && p.productId.toUpperCase() === skuCodeUpper) {
-            matchedProduct = p;
-            break;
-          }
         }
-      }
-
-      // 2. If no exact match, fallback to substring matching against ALL SKUs and ProductIDs sorted by length
-      if (!matchedProduct) {
-        const shopeeFullTextUpper = (shopeeName + ' ' + shopeeSku + ' ' + shopeeSkuCode).toUpperCase();
-        const allIdentifiers = [];
         
+        // Nếu không có SKU nào khớp, tìm theo Product ID
         for (const p of allProducts) {
-          if (p.skus && p.skus.length > 0) {
-            for (const s of p.skus) {
-              if (s.id) {
-                allIdentifiers.push({ type: 'sku', id: s.id.toUpperCase(), skuId: s.id, product: p });
-              }
-            }
-          }
-          if (p.productId) {
-            allIdentifiers.push({ type: 'product', id: p.productId.toUpperCase(), product: p });
+          if (p.productId && p.productId.toUpperCase() === code) {
+            matchedProduct = p;
+            return true;
           }
         }
-        
-        // Sort by length descending (longest string matches first to prevent partial matches like SET inside RBY_SET)
-        allIdentifiers.sort((a, b) => b.id.length - a.id.length);
-        
-        for (const identifier of allIdentifiers) {
-          if (shopeeFullTextUpper.includes(identifier.id)) {
-            matchedProduct = identifier.product;
-            if (identifier.type === 'sku') {
-              matchedSkuId = identifier.skuId;
-            }
-            break;
-          }
-        }
+        return false;
+      };
+
+      // 1. Try to match EXACTLY by SKU Code from payload fields
+      findExactMatch(shopeeSkuCode);
+
+      // 2. Try to match EXACTLY by prefix extracted from name (e.g., "SS - Nến Thơm...")
+      if (!matchedProduct && !matchedSkuId && namePrefix) {
+        findExactMatch(namePrefix);
       }
 
-      // 3. Fallback to name matching
+      // 3. Find Product by Name (nếu các bước trên vẫn chưa tìm được)
       if (!matchedProduct) {
         const shopeeFullTextLower = (shopeeName + ' ' + shopeeSku).toLowerCase();
         for (const p of allProducts) {
@@ -343,40 +328,59 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         }
       }
 
-      // 4. If we found a product but no SKU, try to find a SKU from the variation detail
+      // 3. Find SKU within Product
       if (matchedProduct && !matchedSkuId && matchedProduct.skus && matchedProduct.skus.length > 0) {
         const variationDetailUpper = shopeeSku.toUpperCase();
         const variationDetailLower = shopeeSku.toLowerCase();
         
-        // 4a. Try exact match on sku id in variation detail
+        // 3a. Exact match on sku id in variation detail (using word boundary)
         const sortedProductSkus = [...matchedProduct.skus].sort((a, b) => (b.id?.length || 0) - (a.id?.length || 0));
         for (const s of sortedProductSkus) {
-          if (s.id && variationDetailUpper.includes(s.id.toUpperCase())) {
-            matchedSkuId = s.id;
-            break;
+          if (s.id) {
+            const regex = new RegExp(`\\b${s.id.toUpperCase()}\\b`);
+            if (regex.test(variationDetailUpper)) {
+              matchedSkuId = s.id;
+              break;
+            }
           }
         }
         
-        // 4b. If still not found, try to match by sku label from variant_groups
+        // 3b. Best match on labels
         if (!matchedSkuId) {
+          let bestSku = null;
+          let maxScore = 0;
+          
           for (const s of matchedProduct.skus) {
-            let skuLabels = [];
+            let score = 0;
             if (s.combination) {
               for (const optId of s.combination) {
                 for (const vg of (matchedProduct.variant_groups || [])) {
                   const opt = (vg.options || []).find(o => o.id === optId);
-                  if (opt && opt.label) skuLabels.push(opt.label.toLowerCase());
+                  if (opt && opt.label) {
+                    const lblLower = opt.label.toLowerCase();
+                    // Full match gets 2 points
+                    if (variationDetailLower.includes(lblLower)) {
+                      score += 2;
+                    } else {
+                      // Partial match (e.g. "túi" or "thiệp" in "kèm túi và thiệp")
+                      const words = lblLower.split(/[\s,]+/);
+                      for (const w of words) {
+                        if (w.length > 2 && variationDetailLower.includes(w)) {
+                          score += 1;
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
-            
-            if (skuLabels.length > 0) {
-              const allLabelsMatch = skuLabels.every(lbl => variationDetailLower.includes(lbl));
-              if (allLabelsMatch) {
-                matchedSkuId = s.id;
-                break;
-              }
+            if (score > maxScore) {
+              maxScore = score;
+              bestSku = s.id;
             }
+          }
+          if (bestSku) {
+            matchedSkuId = bestSku;
           }
         }
       }
