@@ -218,3 +218,68 @@ exports.settleImportTicket = async (req, res) => {
     res.status(500).json({ success: false, message: 'Lỗi khi tất toán phiếu nhập' });
   }
 };
+
+// Tất toán nhiều phiếu nhập cùng lúc
+exports.bulkSettleImportTickets = async (req, res) => {
+  try {
+    const { ticketIds } = req.body;
+    if (!ticketIds || !Array.isArray(ticketIds) || ticketIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Không có phiếu nào được chọn' });
+    }
+
+    const tickets = await ImportTicket.find({ _id: { $in: ticketIds }, payment_status: { $ne: 'settled' } });
+    if (tickets.length === 0) {
+      return res.status(400).json({ success: false, message: 'Các phiếu đã được tất toán hoặc không tồn tại' });
+    }
+
+    // Kiểm tra quyền (chỉ cho phép Admin hoặc người tạo phiếu)
+    const validTickets = tickets.filter(ticket => {
+      if (ticket.imported_by && req.user && ticket.imported_by !== req.user.name && ticket.imported_by !== 'Admin') {
+        return false;
+      }
+      return true;
+    });
+
+    if (validTickets.length === 0) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền tất toán các phiếu đã chọn' });
+    }
+
+    const totalAmount = validTickets.reduce((sum, t) => sum + (t.total_amount || 0), 0);
+
+    // Kiểm tra số dư
+    const fundAgg = await FundTransaction.aggregate([
+      { $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }
+    ]);
+    const totalFundBalance = fundAgg.length > 0 ? fundAgg[0].totalBalance : 0;
+
+    if (totalFundBalance < totalAmount) {
+      return res.status(400).json({ 
+        success: false, 
+        code: 'INSUFFICIENT_FUND',
+        message: 'Tài sản chung không đủ tiền để tất toán các phiếu nhập này. Vui lòng góp vốn hoặc rút từ doanh thu.',
+        requiredAmount: totalAmount - totalFundBalance,
+        totalAmount
+      });
+    }
+
+    // Tất toán
+    for (const ticket of validTickets) {
+      const transaction = new FundTransaction({
+        type: 'import_payment',
+        amount: ticket.total_amount,
+        fund_change: -ticket.total_amount,
+        import_ticket_id: ticket._id,
+        note: `Tất toán phiếu nhập ${ticket.code || '#' + ticket._id.toString().slice(-6)}`,
+        created_by: req.user ? req.user.name : 'Admin'
+      });
+      await transaction.save();
+
+      ticket.payment_status = 'settled';
+      await ticket.save();
+    }
+
+    res.json({ success: true, count: validTickets.length, message: `Đã tất toán thành công ${validTickets.length} phiếu nhập` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Lỗi khi tất toán nhiều phiếu nhập' });
+  }
+};

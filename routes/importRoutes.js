@@ -11,5 +11,6 @@ router.put('/:id', importController.updateImportTicket);
 router.put('/:id/complete', importController.completeImportTicket);
 router.delete('/:id', importController.deleteImportTicket);
 router.put('/:id/settle', importController.settleImportTicket);
+router.post('/bulk-settle', importController.bulkSettleImportTickets);
 
 module.exports = router;
