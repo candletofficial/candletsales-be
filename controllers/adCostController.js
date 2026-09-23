@@ -266,7 +266,7 @@ exports.deleteAdCost = async (req, res, next) => {
     if (!record) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy bản ghi' });
     }
-    res.status(500).json({ success: false, message: 'Lỗi khi xóa chi phí quảng cáo' });
+    res.status(200).json({ success: true, message: 'Deleted advertising cost' });
   } catch (error) {
     next(error);
   }

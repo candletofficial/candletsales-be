@@ -7,18 +7,28 @@ const InventoryCheck = require('../models/InventoryCheck');
 const FundTransaction = require('../models/FundTransaction');
 const AffiliateFee = require('../models/AffiliateFee');
 
-// @desc    Lấy danh sách tài khoản (có filter theo status)
+// @desc    Lấy danh sách tài khoản (hỗ trợ filter status, role, tìm kiếm)
 // @route   GET /api/admin/users
 // @access  Private/Admin
 exports.getUsers = async (req, res) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
+    const { status, role, search, page = 1, limit = 20 } = req.query;
     const filter = {};
 
-    // Không hiển thị chính mình trong danh sách
+    // Không hiển thị chính mình trong danh sách nếu không yêu cầu cụ thể
     filter._id = { $ne: req.user.id };
 
     if (status) filter.status = status;
+    if (role) filter.role = role;
+
+    if (search && search.trim()) {
+      const term = search.trim();
+      filter.$or = [
+        { name: { $regex: term, $options: 'i' } },
+        { email: { $regex: term, $options: 'i' } },
+        { phone: { $regex: term, $options: 'i' } },
+      ];
+    }
 
     const skip = (Number(page) - 1) * Number(limit);
     const total = await User.countDocuments(filter);
@@ -28,15 +38,27 @@ exports.getUsers = async (req, res) => {
       .skip(skip)
       .limit(Number(limit));
 
+    // Thống kê số lượng tổng quan theo vai trò
+    const [adminCount, customerCount, totalAll] = await Promise.all([
+      User.countDocuments({ _id: { $ne: req.user.id }, role: 'admin' }),
+      User.countDocuments({ _id: { $ne: req.user.id }, role: 'customer' }),
+      User.countDocuments({ _id: { $ne: req.user.id } }),
+    ]);
+
     res.status(200).json({
       success: true,
       data: {
         users,
+        stats: {
+          adminCount,
+          customerCount,
+          totalCount: totalAll,
+        },
         pagination: {
           total,
           page: Number(page),
           limit: Number(limit),
-          totalPages: Math.ceil(total / Number(limit)),
+          totalPages: Math.ceil(total / Number(limit)) || 1,
         },
       },
     });
@@ -161,21 +183,67 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
-// @desc    Thống kê tài khoản theo trạng thái
+// @desc    Cập nhật vai trò tài khoản (admin / customer)
+// @route   PUT /api/admin/users/:id/role
+// @access  Private/Admin
+exports.updateUserRole = async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['admin', 'customer'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Vai trò không hợp lệ (admin hoặc customer)' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    }
+
+    if (user.isDefaultAdmin) {
+      return res.status(400).json({ success: false, message: 'Không thể thay đổi vai trò tài khoản admin gốc' });
+    }
+
+    if (user._id.toString() === req.user.id) {
+      return res.status(400).json({ success: false, message: 'Không thể tự thay đổi vai trò của chính mình' });
+    }
+
+    // Nghiêm cấm nâng cấp tài khoản khách hàng mua sắm thành quản trị viên
+    if (user.role === 'customer' && role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Tài khoản khách hàng không được phép nâng cấp lên Quản trị viên vì lý do an toàn bảo mật!'
+      });
+    }
+
+    user.role = role;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Đã đổi vai trò tài khoản sang ${role === 'admin' ? 'Quản trị viên' : 'Khách hàng'}`,
+      data: { id: user._id, name: user.name, email: user.email, role: user.role }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Thống kê tài khoản theo trạng thái và vai trò
 // @route   GET /api/admin/users/stats
 // @access  Private/Admin
 exports.getUserStats = async (req, res) => {
   try {
-    const [total, pending, active, rejected] = await Promise.all([
+    const [total, pending, active, rejected, totalAdmins, totalCustomers] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ status: 'pending' }),
       User.countDocuments({ status: 'active' }),
       User.countDocuments({ status: 'rejected' }),
+      User.countDocuments({ role: 'admin' }),
+      User.countDocuments({ role: 'customer' }),
     ]);
 
     res.status(200).json({
       success: true,
-      data: { total, pending, active, rejected },
+      data: { total, pending, active, rejected, totalAdmins, totalCustomers },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const importController = require('../controllers/importController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, adminOnly } = require('../middlewares/authMiddleware');
 
-router.use(protect);
+router.use(protect, adminOnly);
 
 router.get('/', importController.getImportTickets);
 router.post('/', importController.createImportTicket);

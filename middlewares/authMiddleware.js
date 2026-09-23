@@ -35,3 +35,11 @@ exports.protect = async (req, res, next) => {
     return res.status(401).json({ success: false, message: 'Token không hợp lệ hoặc đã hết hạn' });
   }
 };
+
+// Only administrators may change operational and financial data.
+exports.adminOnly = (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Administrator access is required' });
+  }
+  next();
+};

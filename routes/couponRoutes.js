@@ -8,9 +8,9 @@ const {
   deleteCoupon,
   validateCoupon
 } = require('../controllers/couponController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, adminOnly } = require('../middlewares/authMiddleware');
 
-router.use(protect);
+router.use(protect, adminOnly);
 
 router.post('/validate', validateCoupon);
 router.route('/')

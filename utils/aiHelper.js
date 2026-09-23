@@ -15,7 +15,7 @@ const formatPct = (n) => (n != null ? `${Number(n).toFixed(1)}%` : 'N/A');
  */
 const buildBusinessContext = (dashboardData, periodLabel = 'kỳ hiện tại') => {
   if (!dashboardData) {
-    return `Bạn là AI Business Analyst cho cửa hàng nến thơm handmade "Candlet Sales".
+    return `Bạn là AI Business Analyst cho cửa hàng nến thơm handmade "CandletShop".
 Hiện chưa có dữ liệu kinh doanh. Hãy trả lời các câu hỏi chung về kinh doanh nến thơm.`;
   }
 
@@ -73,7 +73,7 @@ ${rows.join('\n')}
 `;
   }
 
-  return `Bạn là AI Business Analyst thông minh cho cửa hàng nến thơm handmade "Candlet Sales".
+  return `Bạn là AI Business Analyst thông minh cho cửa hàng nến thơm handmade "CandletShop".
 Nhiệm vụ của bạn là phân tích dữ liệu kinh doanh và trả lời các câu hỏi của chủ shop một cách rõ ràng, thực tế, hữu ích.
 
 NGUYÊN TẮC TRẢ LỜI:

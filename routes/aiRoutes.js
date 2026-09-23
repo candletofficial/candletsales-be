@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { chat, getSuggestions, getSmartAlerts } = require('../controllers/aiController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, adminOnly } = require('../middlewares/authMiddleware');
 
 // Tất cả routes AI đều yêu cầu đăng nhập
-router.use(protect);
+router.use(protect, adminOnly);
 
 router.get('/suggestions', getSuggestions);
 router.get('/smart-alerts', getSmartAlerts);

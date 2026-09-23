@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { getAdCosts, createAdCost, updateAdCost, deleteAdCost, getBalances, topupPlatform, getAffiliateFees, saveAffiliateFee, syncAdCost } = require('../controllers/adCostController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, adminOnly } = require('../middlewares/authMiddleware');
 
-router.use(protect);
+router.use(protect, adminOnly);
 
 router.get('/balances', getBalances);
 router.post('/topup', topupPlatform);

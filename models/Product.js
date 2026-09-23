@@ -3,9 +3,20 @@ const mongoose = require('mongoose');
 const productSchema = new mongoose.Schema({
   productId: { type: String, required: true },
   name: { type: String, required: true },
-  image: { type: String, default: null },
+  image: { type: String, default: null }, // Main/Thumbnail
+  images: [{ type: String }], // Gallery
   description: { type: String, default: '' },
   base_price: { type: Number, default: 0 },
+  original_price: { type: Number, default: 0 },
+  tag: { type: String, default: '' },
+  tag_color: { type: String, default: '' },
+  
+  // Filtering fields
+  scent_group: { type: String, default: null },
+  category: { type: String, default: 'Nến Hũ Đơn' },
+  volume: { type: String, default: '200g (~50 giờ đốt)' },
+  wax_type: [{ type: String }],
+  wick_type: [{ type: String }],
 
   base_ingredients: [{
     ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },

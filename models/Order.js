@@ -10,7 +10,7 @@ const orderItemSchema = new mongoose.Schema({
   sku_label: { type: String, default: '' },        // VD: "Rosy Berry - Large"
   unit_price: { type: Number, required: true },    // giá bán tại thời điểm đặt
   unit_cost: { type: Number, default: 0 },          // giá vốn tại thời điểm đặt
-  quantity: { type: Number, required: true, min: 1 },
+  quantity: { type: Number, required: true, min: 1 }
 }, { _id: false });
 
 const orderSchema = new mongoose.Schema({
@@ -39,16 +39,31 @@ const orderSchema = new mongoose.Schema({
   customer_name: { type: String, default: '' },
   customer_phone: { type: String, default: '' },
   customer_address: { type: String, default: '' },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   payment_method: {
     type: String,
     enum: ['cash', 'transfer'],
     default: 'cash'
   },
+  // Thanh toán và giao hàng là hai trạng thái độc lập. Đơn chuyển khoản chỉ
+  // được đánh dấu paid sau khi webhook SePay đã xác thực giao dịch thật.
+  payment_status: {
+    type: String,
+    enum: ['pending', 'paid', 'failed', 'refunded'],
+    default: 'pending'
+  },
+  payment_code: { type: String, unique: true, sparse: true },
+  payment_transaction_id: { type: String, default: null },
+  paid_at: { type: Date, default: null },
+  // Chỉ được xác nhận sau khi shop đã thực sự chuyển hoàn tiền cho khách.
+  refund_transaction_id: { type: String, default: null },
+  refunded_at: { type: Date, default: null },
   shippingMethod: {
     type: String,
     enum: ['standard', 'express'],
     default: 'standard'
   },
+  shipping_fee: { type: Number, default: 0 },
   packaging_cost: { type: Number, default: 0 },
   note: { type: String, default: '' },
   discount_amount: { type: Number, default: 0 }, // Số tiền được giảm
@@ -57,12 +72,20 @@ const orderSchema = new mongoose.Schema({
   is_seeding: { type: Boolean, default: false },
   seeding_cost: { type: Number, default: 0 },
   ordered_at: { type: Date, default: Date.now },
-  // Trạng thái đơn hàng
+  // Trạng thái đơn hàng tổng quát
   status: {
     type: String,
-    enum: ['pending', 'completed', 'returned'],
+    enum: ['pending', 'completed', 'returned', 'cancelled'],
     default: 'completed',
   },
+  // Trạng thái giao hàng (Đặc biệt dành cho đơn Website)
+  delivery_status: {
+    type: String,
+    enum: ['pending', 'confirmed', 'shipping', 'delivered', 'failed', 'cancelled'],
+    default: 'pending',
+  },
+  cancelled_reason: { type: String, default: '' },
+  cancelled_at: { type: Date, default: null },
   return_cost: { type: Number, default: 0 },   // Chi phí hoàn (lấy từ cấu hình khi đánh dấu hoàn)
   returned_at: { type: Date, default: null },   // Thời điểm đánh dấu hoàn
 }, { timestamps: true });

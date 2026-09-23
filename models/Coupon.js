@@ -56,6 +56,25 @@ const couponSchema = new mongoose.Schema({
   is_active: { 
     type: Boolean, 
     default: true 
+  },
+  // Các trường mới cho Website
+  is_website_only: {
+    type: Boolean,
+    default: false
+  },
+  is_public: {
+    type: Boolean,
+    default: true // Nếu false, mã sẽ không hiển thị trên danh sách gợi ý
+  },
+  usage_limit_per_user: {
+    type: String,
+    enum: ['unlimited', 'once'],
+    default: 'unlimited'
+  },
+  customer_condition: {
+    type: String,
+    enum: ['all', 'first_time', 'returning'],
+    default: 'all'
   }
 }, { timestamps: true });
 

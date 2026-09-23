@@ -1,4 +1,5 @@
 const Product = require('../models/Product');
+const { removeFileIfLocal } = require('./uploadController');
 
 // Lấy danh sách sản phẩm và tự động tính toán BOM Cost
 exports.getProducts = async (req, res, next) => {
@@ -57,20 +58,43 @@ exports.createProduct = async (req, res, next) => {
 
 exports.updateProduct = async (req, res, next) => {
   try {
+    const existing = await Product.findById(req.params.id);
+    if (!existing) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
+
+    // Thu thập danh sách ảnh cũ trong database
+    const oldImages = [existing.image, ...(existing.images || [])].filter(Boolean);
+
+    // Thu thập danh sách ảnh mới được gửi lên
+    const newImages = [req.body.image, ...(req.body.images || [])].filter(Boolean);
+
+    // Tìm những ảnh cũ bị gỡ bỏ (không còn xuất hiện trong newImages)
+    const removedImages = oldImages.filter((oldImg) => !newImages.includes(oldImg));
+
+    // Xóa các file vật lý của những ảnh đã bị loại bỏ
+    removedImages.forEach((img) => {
+      removeFileIfLocal(img);
+    });
+
     const product = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-    if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
     res.status(200).json({ success: true, data: product });
   } catch (error) {
-    require('fs').writeFileSync('update-error.log', String(error.message) + '\n' + String(error.stack));
     next(error);
   }
 };
 
 exports.deleteProduct = async (req, res, next) => {
   try {
-    const product = await Product.findByIdAndDelete(req.params.id);
+    const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
-    res.status(200).json({ success: true, message: 'Đã xóa sản phẩm' });
+
+    // Xóa toàn bộ file ảnh vật lý của sản phẩm trên ổ cứng máy chủ
+    const allImages = [product.image, ...(product.images || [])].filter(Boolean);
+    allImages.forEach((img) => {
+      removeFileIfLocal(img);
+    });
+
+    await Product.findByIdAndDelete(req.params.id);
+    res.status(200).json({ success: true, message: 'Đã xóa sản phẩm và các file ảnh liên quan' });
   } catch (error) {
     next(error);
   }

@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const fundController = require('../controllers/fundController');
+const { protect, adminOnly } = require('../middlewares/authMiddleware');
+
+router.use(protect, adminOnly);
 
 router.get('/summary', fundController.getSummary);
 router.get('/transactions', fundController.getTransactions);

@@ -5,7 +5,7 @@ const materialController = require('../controllers/materialController');
 const router = express.Router();
 
 // Tất cả các route quản lý nguyên liệu đều yêu cầu đăng nhập và có quyền admin
-router.use(protect);
+router.use(protect, adminOnly);
 // Nếu cần chỉ admin mặc định mới được quản lý, có thể dùng adminOnly, 
 // nhưng thường quản lý nguyên liệu nhân viên (active user) cũng có thể xem/sửa, 
 // tùy vào logic. Ở đây tạm thời chỉ cần protect (user active) là được.

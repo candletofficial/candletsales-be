@@ -182,6 +182,17 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         console.log(`Order ${payload.id} amount changed from ${existingOrder.total_price} to ${newOrderAmount}. Updating...`);
         existingOrder.total_price = newOrderAmount;
         updated = true;
+
+        // Cập nhật lại số tiền trong FundTransaction nếu đơn đã ghi nhận doanh thu
+        if (existingOrder.status === 'completed') {
+          const FundTransaction = require('../models/FundTransaction');
+          const existingRevTx = await FundTransaction.findOne({ order_id: existingOrder._id, type: 'order_revenue' });
+          if (existingRevTx) {
+            existingRevTx.amount = newOrderAmount;
+            existingRevTx.platform_change = newOrderAmount;
+            await existingRevTx.save();
+          }
+        }
       }
 
       // Sync customer info and note

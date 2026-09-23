@@ -6,14 +6,15 @@ const {
   rejectUser,
   revokeUser,
   deleteUser,
+  updateUserRole,
   getUserStats,
   getDashboardStats,
   getRecentActivities
 } = require('../controllers/adminController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, adminOnly } = require('../middlewares/authMiddleware');
 
 // Tất cả routes đều yêu cầu đăng nhập và status = active
-router.use(protect);
+router.use(protect, adminOnly);
 
 router.get('/users/stats', getUserStats);
 router.get('/users', getUsers);
@@ -22,6 +23,7 @@ router.get('/activities', getRecentActivities);
 router.put('/users/:id/approve', approveUser);
 router.put('/users/:id/reject', rejectUser);
 router.put('/users/:id/revoke', revokeUser);
+router.put('/users/:id/role', updateUserRole);
 router.delete('/users/:id', deleteUser);
 
 module.exports = router;

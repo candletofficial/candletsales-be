@@ -17,15 +17,39 @@ const userSchema = new mongoose.Schema(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, 'Email không hợp lệ'],
     },
+    // ID ổn định do Facebook cấp, chỉ dùng cho đăng nhập khách hàng.
+    facebook_id: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: null,
+    },
+    // ID ổn định do Google cấp, chỉ dùng cho đăng nhập khách hàng.
+    google_id: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: null,
+    },
     password: {
       type: String,
       required: [true, 'Mật khẩu là bắt buộc'],
       minlength: [6, 'Mật khẩu phải có ít nhất 6 ký tự'],
       select: false,
     },
+    phone: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    address: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     role: {
       type: String,
-      enum: ['admin'],
+      enum: ['admin', 'customer'],
       default: 'admin',
     },
     // Trạng thái tài khoản:
