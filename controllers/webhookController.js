@@ -2,6 +2,8 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Material = require('../models/Material');
 const { buildMaterialDeductions } = require('./orderController');
+const { classifyPancakeStatus } = require('../utils/pancakeOrderStatus');
+const { applyPancakeCustomerDetails } = require('../utils/pancakeCustomerDetails');
 
 // Helper to generate a random order ID
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -59,26 +61,46 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     console.log(`[DEBUG] display_id=${payload.display_id}`);
 
     // Validate payload
-    if (!payload.id || !payload.customer || !payload.items) {
+    if (!payload.id) {
       return res.status(200).json({ success: true, message: 'Ignored: Invalid payload structure' });
     }
 
     // Check if order already exists in our database
     const existingOrder = await Order.findOne({ pancake_order_id: payload.id });
+    const pancakeStatus = classifyPancakeStatus(payload);
+    const isReturned = pancakeStatus === 'returned';
+    const isCancelled = pancakeStatus === 'cancelled' || pancakeStatus === 'removed';
     if (existingOrder) {
-      // Check if order is cancelled
-      const statusName = (payload.status_name || '').toLowerCase();
-      // status 7 = Cancelled. status 9 = Waiting for pick up (KHÔNG phải cancelled)
-      const isCancelled = payload.status === 7 || 
-        statusName.includes('huỷ') || 
-        statusName.includes('hủy') || 
-        statusName.includes('cancel') ||
-        (payload.partner && payload.partner.partner_status === 'cancelled');
+      // Customer metadata can still be enriched after return/cancellation without
+      // replaying stock or revenue operations. Partial events keep saved details.
+      if (applyPancakeCustomerDetails(existingOrder, payload)) await existingOrder.save();
+      // Replayed or stale events must not delete a returned order or refund it twice.
+      if (existingOrder.status === 'returned') {
+        return res.status(200).json({ success: true, message: 'Order already returned' });
+      }
+
+      if (isReturned) {
+        console.log(`Order ${payload.id} is returned on Pancake. Marking as returned...`);
+        const { processReturnOrder } = require('./orderController');
+        // A retained cancelled order has already had its materials refunded.
+        if (existingOrder.status === 'cancelled') {
+          existingOrder.status = 'returned';
+          existingOrder.returned_at = new Date();
+          await existingOrder.save();
+        } else {
+          await processReturnOrder(existingOrder._id, null);
+        }
+        return res.status(200).json({ success: true, message: 'Order marked as returned' });
+      }
+
+      if (existingOrder.status === 'cancelled') {
+        return res.status(200).json({ success: true, message: 'Order already cancelled' });
+      }
       
       if (isCancelled) {
-        console.log(`Order ${payload.id} is cancelled on Pancake. Deleting and refunding materials...`);
+        console.log(`Order ${payload.id} is cancelled on Pancake. Keeping order and refunding materials...`);
         const FundTransaction = require('../models/FundTransaction');
-        const order = await Order.findByIdAndDelete(existingOrder._id);
+        const order = existingOrder;
         
         if (order) {
           await FundTransaction.deleteMany({ order_id: order._id });
@@ -105,25 +127,11 @@ exports.handlePancakeWebhook = async (req, res, next) => {
             await Promise.all(updatePromises);
           }
         }
-        return res.status(200).json({ success: true, message: 'Order deleted and materials refunded' });
-      }
-
-      // Check if order is returned
-      // status 5 = Returned, status 4 = Returning
-      const isReturned = payload.status === 5 || payload.status === 4 ||
-        statusName.includes('đã hoàn') || statusName === 'hoàn' || statusName.includes('hoàn hàng') || statusName.includes('chuyển hoàn') || statusName.includes('returned') || (payload.partner && payload.partner.partner_status === 'returned');
-      
-      if (isReturned && existingOrder.status !== 'returned') {
-        console.log(`Order ${payload.id} is returned on Pancake. Marking as returned...`);
-        const { processReturnOrder } = require('./orderController');
-        try {
-          await processReturnOrder(existingOrder._id, null);
-          return res.status(200).json({ success: true, message: 'Order marked as returned' });
-        } catch (err) {
-          console.error(`Failed to mark order ${payload.id} as returned:`, err.message);
-          // Don't return 500, return 200 so Pancake doesn't retry infinitely
-          return res.status(200).json({ success: false, message: 'Failed to mark as returned' });
-        }
+        order.status = 'cancelled';
+        order.cancelled_at = new Date();
+        order.cancelled_reason = pancakeStatus === 'removed' ? 'Đã xoá trên Pancake' : 'Đã huỷ trên Pancake';
+        await order.save();
+        return res.status(200).json({ success: true, message: 'Order marked as cancelled and materials refunded' });
       }
 
       let updated = false;
@@ -195,25 +203,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         }
       }
 
-      // Sync customer info and note
-      if (payload.customer) {
-        if (payload.customer.name && existingOrder.customer_name !== payload.customer.name) {
-          existingOrder.customer_name = payload.customer.name;
-          updated = true;
-        }
-        if (payload.customer.phone_numbers && payload.customer.phone_numbers.length > 0) {
-          if (existingOrder.customer_phone !== payload.customer.phone_numbers[0]) {
-            existingOrder.customer_phone = payload.customer.phone_numbers[0];
-            updated = true;
-          }
-        }
-        if (payload.customer.shipping_address && payload.customer.shipping_address.full_address) {
-          if (existingOrder.customer_address !== payload.customer.shipping_address.full_address) {
-            existingOrder.customer_address = payload.customer.shipping_address.full_address;
-            updated = true;
-          }
-        }
-      }
+      // Customer/recipient details were synchronized before terminal-state guards.
       
       if (payload.note !== undefined && existingOrder.note !== payload.note) {
         existingOrder.note = payload.note;
@@ -267,24 +257,11 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       return res.status(200).json({ success: true, message: 'Order already exists' });
     }
 
-    // Guard: nếu đơn chưa có trong DB nhưng đã bị hủy/hoàn → bỏ qua, không tạo mới
-    const statusNameNew = (payload.status_name || '').toLowerCase();
-    // status 7 = Cancelled. status 9 = Waiting for pick up (KHÔNG phải cancelled)
-    const isCancelledNew = payload.status === 7 ||
-      statusNameNew.includes('huỷ') ||
-      statusNameNew.includes('hủy') ||
-      statusNameNew.includes('cancel') ||
-      (payload.partner && payload.partner.partner_status === 'cancelled');
-    // status 5 = Returned, status 4 = Returning
-    const isReturnedNew = payload.status === 5 || payload.status === 4 ||
-      statusNameNew.includes('đã hoàn') || statusNameNew === 'hoàn' ||
-      statusNameNew.includes('hoàn hàng') || statusNameNew.includes('chuyển hoàn') ||
-      statusNameNew.includes('returned') ||
-      (payload.partner && payload.partner.partner_status === 'returned');
-
-    if (isCancelledNew || isReturnedNew) {
-      console.log(`Order ${payload.id} is cancelled/returned but not in DB. Skipping creation.`);
-      return res.status(200).json({ success: true, message: 'Ignored: Cancelled or returned order not in DB' });
+    if (isCancelled) {
+      return res.status(200).json({ success: true, message: 'Ignored: Cancelled order not in DB' });
+    }
+    if (!payload.customer || !Array.isArray(payload.items)) {
+      return res.status(200).json({ success: true, message: 'Ignored: Full order payload required for creation' });
     }
 
     const allProducts = await Product.find().populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
@@ -468,7 +445,9 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     const isExpress = payloadStr.includes('hỏa tốc') || payloadStr.includes('instant') || payloadStr.includes('grabexpress') || payloadStr.includes('ahamove');
     const shippingMethod = isExpress ? 'express' : 'standard';
 
-    if (validItems.length > 0) {
+    // A returned order received for the first time is imported for history only.
+    // In particular, recreating a previously deleted order must not move stock again.
+    if (!isReturned && validItems.length > 0) {
       const { deductions, packagingCost } = await buildMaterialDeductions(validItems, shippingMethod);
       logisticsCost = packagingCost || 0;
 
@@ -537,7 +516,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       // - status=16 (Collected money)
       // - status_name chứa từ khoá hoàn thành
       // - histories[].shopee_status.new = 'COMPLETED' (dành cho đơn Shopee)
-    const initialStatus = isCompleted ? 'completed' : 'pending';
+    const initialStatus = isReturned ? 'returned' : isCompleted ? 'completed' : 'pending';
 
     const order = new Order({
       orderId: payload.display_id || payload.id || generateOrderId(),
@@ -554,15 +533,17 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       packaging_cost: logisticsCost,
       note: payload.note || '',
       status: initialStatus,
+      returned_at: isReturned ? new Date() : null,
       ordered_at: orderedAt,
     });
 
+    applyPancakeCustomerDetails(order, payload);
     await order.save();
     console.log(`Successfully saved Pancake order as: ${order.orderId}`);
 
     // Trigger auto confirm imports
     const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
-    triggerAutoConfirmImports().catch(console.error);
+    if (!isReturned) triggerAutoConfirmImports().catch(console.error);
 
     res.status(200).json({ success: true, message: 'Order processed successfully' });
   } catch (error) {

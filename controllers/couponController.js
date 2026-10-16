@@ -1,11 +1,40 @@
 const Coupon = require('../models/Coupon');
+const { freeshipDiscount } = require('../utils/freeshipDiscount');
+
+const normalizeFreeship = (body) => {
+  if (body.type === 'freeship') {
+    body.is_website_only = true;
+    if (!body.shipping_discount_type) {
+      body.shipping_discount_type = 'percent';
+      body.value = 100;
+    }
+    const value = Number(body.value);
+    const minimum = Number(body.min_order_value ?? 0);
+    const cap = body.max_discount === '' || body.max_discount == null ? null : Number(body.max_discount);
+    if (!['percent', 'fixed'].includes(body.shipping_discount_type)
+      || !Number.isFinite(value) || value <= 0
+      || (body.shipping_discount_type === 'percent' && value > 100)
+      || !Number.isFinite(minimum) || minimum < 0
+      || (cap !== null && (!Number.isFinite(cap) || cap <= 0))) {
+      throw new Error('Mã freeship cần mức giảm lớn hơn 0 (tối đa 100%), đơn tối thiểu không âm và mức giảm tối đa hợp lệ.');
+    }
+    body.value = value;
+    body.min_order_value = minimum;
+    body.max_discount = body.shipping_discount_type === 'percent' ? cap : null;
+  }
+};
 
 // @desc    Lấy danh sách mã giảm giá
 // @route   GET /api/coupons
 // @access  Private
 exports.getCoupons = async (req, res) => {
   try {
-    const coupons = await Coupon.find().populate('product_ids', 'name productId').sort({ createdAt: -1 });
+    // No source means the admin management list; it must retain every coupon.
+    const source = req.query?.source;
+    const filter = source && source !== 'website'
+      ? { type: { $ne: 'freeship' }, is_website_only: { $ne: true } }
+      : {};
+    const coupons = await Coupon.find(filter).populate('product_ids', 'name productId').sort({ createdAt: -1 });
     res.status(200).json({ success: true, data: coupons });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -30,6 +59,7 @@ exports.getCouponById = async (req, res) => {
 // @access  Private
 exports.createCoupon = async (req, res) => {
   try {
+    normalizeFreeship(req.body);
     req.body.code = req.body.code.toUpperCase();
     const existing = await Coupon.findOne({ code: req.body.code });
     if (existing) {
@@ -48,6 +78,14 @@ exports.createCoupon = async (req, res) => {
 // @access  Private
 exports.updateCoupon = async (req, res) => {
   try {
+    const current = await Coupon.findById(req.params.id);
+    if (!current) return res.status(404).json({ success: false, message: 'Không tìm thấy mã giảm giá' });
+    if ((req.body.type || current.type) === 'freeship') {
+      req.body = { ...current.toObject(), ...req.body };
+      delete req.body._id;
+      delete req.body.__v;
+    }
+    normalizeFreeship(req.body);
     if (req.body.code) {
       req.body.code = req.body.code.toUpperCase();
       const existing = await Coupon.findOne({ code: req.body.code, _id: { $ne: req.params.id } });
@@ -86,7 +124,7 @@ exports.deleteCoupon = async (req, res) => {
 // @access  Private
 exports.validateCoupon = async (req, res) => {
   try {
-    const { code, items, totalPrice } = req.body;
+    const { code, items, totalPrice, shippingFee = 0, source = 'pos' } = req.body;
     if (!code) return res.status(400).json({ success: false, message: 'Vui lòng nhập mã giảm giá' });
     if (totalPrice === undefined) return res.status(400).json({ success: false, message: 'Thiếu tổng tiền đơn hàng' });
 
@@ -94,6 +132,9 @@ exports.validateCoupon = async (req, res) => {
     
     if (!coupon) {
       return res.status(404).json({ success: false, message: 'Mã giảm giá không tồn tại' });
+    }
+    if (source !== 'website' && (coupon.type === 'freeship' || coupon.is_website_only)) {
+      return res.status(400).json({ success: false, message: 'Mã này chỉ dành cho Website, không áp dụng tại POS hoặc kênh khác.' });
     }
     if (!coupon.is_active) {
       return res.status(400).json({ success: false, message: 'Mã giảm giá đã bị vô hiệu hóa' });
@@ -168,9 +209,14 @@ exports.validateCoupon = async (req, res) => {
       discountAmount = totalPrice;
     }
 
+    if (coupon.type === 'freeship') {
+      discountAmount = freeshipDiscount(coupon, items, shippingFee);
+    }
+
     res.status(200).json({
       success: true,
       data: {
+        type: coupon.type,
         discount_amount: discountAmount,
         coupon_id: coupon._id,
         code: coupon.code,
@@ -179,6 +225,6 @@ exports.validateCoupon = async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };

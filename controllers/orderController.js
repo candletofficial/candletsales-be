@@ -7,6 +7,8 @@ const FundTransaction = require('../models/FundTransaction');
 const PaymentSession = require('../models/PaymentSession');
 const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
+const { freeshipDiscount } = require('../utils/freeshipDiscount');
+const { itemMaterials, materialId, preserveOrderMaterials } = require('../utils/orderItemMaterials');
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -39,24 +41,13 @@ const buildMaterialDeductions = async (items, shippingMethod = 'standard') => {
   };
 
   for (const item of items) {
-    const product = productMap[item.product_id.toString()];
-    if (!product) continue;
+    const product = productMap[materialId(item.product_id)];
 
     const qty = item.quantity; // số lượng sản phẩm trong đơn
 
-    // 1. Trừ nguyên liệu gốc (base_ingredients) × số lượng sản phẩm
-    for (const bi of product.base_ingredients || []) {
+    // Use this item's saved recipe for edits, returns and deletions as well.
+    for (const bi of itemMaterials(item, product)) {
       addDeduct(bi.ingredient_id, bi.quantity * qty);
-    }
-
-    // 2. Nếu có chọn SKU cụ thể → trừ thêm extra_ingredients của SKU đó
-    if (item.sku_id) {
-      const sku = (product.skus || []).find(s => s.id === item.sku_id);
-      if (sku) {
-        for (const ei of sku.extra_ingredients || []) {
-          addDeduct(ei.ingredient_id, ei.quantity * qty);
-        }
-      }
     }
   }
 
@@ -219,13 +210,9 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, user_id, payment_method, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
-
-    // QR checkout creates only a short-lived payment session. A real Order is
-    // created later, exclusively by the verified SePay webhook.
-    if (source === 'website' && payment_method === 'transfer' && !req.internalPaymentConfirmation) {
-      return createTransferPaymentSession(req, res, next);
-    }
+    let { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, user_id, payment_method, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
+    if (Array.isArray(items)) items = preserveOrderMaterials(items);
+    req.body.items = items;
 
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -260,7 +247,7 @@ exports.createOrder = async (req, res, next) => {
       }
 
       // Nâng cao cho Website
-      if (coupon.is_website_only) {
+      if (coupon.is_website_only || coupon.type === 'freeship') {
         if (source !== 'website') {
           return res.status(400).json({ success: false, message: 'Mã giảm giá này chỉ áp dụng khi đặt hàng trên Website.' });
         }
@@ -292,6 +279,40 @@ exports.createOrder = async (req, res, next) => {
           }
         }
       }
+    }
+
+    // Recalculate freeship before creating either a COD order or a QR session.
+    if (discount_code) {
+      const Coupon = require('../models/Coupon');
+      const coupon = await Coupon.findOne({ code: discount_code, is_active: true });
+      if (coupon?.type === 'freeship') {
+        if (source !== 'website' || is_seeding || is_replacement) {
+          return res.status(400).json({ success: false, message: 'Mã freeship áp dụng cho đơn website có phí vận chuyển.' });
+        }
+        if (!req.internalPaymentConfirmation) {
+          const products = await Product.find({ _id: { $in: items.map(item => item.product_id) } });
+          items = items.map(item => {
+            const product = products.find(p => String(p._id) === String(item.product_id));
+            const sku = product?.skus?.find(s => s.id === item.sku_id);
+            if (!product || (item.sku_id && !sku) || !Number.isInteger(Number(item.quantity)) || Number(item.quantity) <= 0) {
+              const error = new Error('Sản phẩm hoặc số lượng trong đơn không hợp lệ.');
+              error.statusCode = 400;
+              throw error;
+            }
+            return { ...item, unit_price: sku?.price > 0 ? sku.price : product.base_price };
+          });
+          discount_amount = freeshipDiscount(coupon, items, shipping_fee);
+          const subtotal = items.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
+          total_price = subtotal + Number(shipping_fee) - discount_amount;
+        }
+        // On payment confirmation, retain the already-paid session's price snapshot.
+        Object.assign(req.body, { items, total_price, discount_amount });
+      }
+    }
+
+    // A real QR order is created only by the verified payment webhook.
+    if (source === 'website' && payment_method === 'transfer' && !req.internalPaymentConfirmation) {
+      return createTransferPaymentSession(req, res, next);
     }
 
     // 1. Tính lượng nguyên liệu cần trừ & kiểm tra tồn kho & tính phí đóng gói
@@ -474,7 +495,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    const { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code, delivery_status, status } = req.body;
+    let { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code, delivery_status, status } = req.body;
 
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -483,6 +504,16 @@ exports.updateOrder = async (req, res, next) => {
     const oldOrder = await Order.findById(req.params.id);
     if (!oldOrder) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+    }
+    if (Array.isArray(items)) items = preserveOrderMaterials(items, oldOrder.items);
+
+    // Check the resulting channel before any inventory or accounting changes.
+    if ((source || oldOrder.source) !== 'website' && discount_code) {
+      const Coupon = require('../models/Coupon');
+      const coupon = await Coupon.findOne({ code: discount_code });
+      if (coupon && (coupon.type === 'freeship' || coupon.is_website_only)) {
+        return res.status(400).json({ success: false, message: 'Mã giảm giá này chỉ áp dụng khi đặt hàng trên Website.' });
+      }
     }
 
     // Nếu đơn hàng đã bị hoàn, chỉ cho phép cập nhật phí hoàn (return_cost) hoặc ghi chú
@@ -544,6 +575,19 @@ exports.updateOrder = async (req, res, next) => {
       }
       
       return res.status(200).json({ success: true, message: 'Không có thay đổi nào được áp dụng.' });
+    }
+
+    if (discount_code) {
+      const Coupon = require('../models/Coupon');
+      const coupon = await Coupon.findOne({ code: discount_code });
+      if (coupon?.type === 'freeship') {
+        if ((source || oldOrder.source) !== 'website' || is_seeding || is_replacement) {
+          return res.status(400).json({ success: false, message: 'Mã freeship áp dụng cho đơn website có phí vận chuyển.' });
+        }
+        discount_amount = freeshipDiscount(coupon, items, oldOrder.shipping_fee || 0);
+        total_price = items.reduce((sum, item) => sum + item.unit_price * item.quantity, 0)
+          + Number(oldOrder.shipping_fee || 0) - discount_amount;
+      }
     }
 
     const newSeedingCost = Number(seeding_cost || 0);
@@ -1289,7 +1333,7 @@ exports.getShopOrders = async (req, res, next) => {
       return res.status(200).json({ success: true, data: [] });
     }
 
-    const orders = await Order.find(query).sort({ ordered_at: -1 });
+    const orders = await Order.find(query).select('-items.material_overrides -items.materials_key -pancake_details').sort({ ordered_at: -1 });
     res.status(200).json({ success: true, data: orders });
   } catch (error) {
     next(error);
@@ -1306,7 +1350,7 @@ exports.getShopOrderById = async (req, res, next) => {
         { orderId: id },
         ...(mongoose.isValidObjectId(id) ? [{ _id: id }] : [])
       ]
-    });
+    }).select('-items.material_overrides -items.materials_key -pancake_details');
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
@@ -1374,7 +1418,7 @@ exports.cancelShopOrder = async (req, res, next) => {
         { orderId: id },
         ...(mongoose.isValidObjectId(id) ? [{ _id: id }] : [])
       ]
-    });
+    }).select('-pancake_details');
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });

@@ -2,6 +2,7 @@ const FundTransaction = require('../models/FundTransaction');
 const Order = require('../models/Order');
 const ImportTicket = require('../models/ImportTicket');
 const mongoose = require('mongoose');
+const { groupFundHistory, filterFundHistory, LEGACY_PAIR_WINDOW_MS } = require('../utils/groupFundHistory');
 
 const PLATFORMS = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
 
@@ -117,37 +118,42 @@ exports.getTransactions = async (req, res) => {
     const limit = isNaN(limitParam) ? 20 : limitParam;
     const skip = limit > 0 ? (page - 1) * limit : 0;
     const filter = {};
-    if (req.query.type && req.query.type !== 'all') {
-      filter.type = req.query.type;
-    }
-
     if (req.query.startDate || req.query.endDate) {
       filter.createdAt = {};
       if (req.query.startDate) {
-        filter.createdAt.$gte = new Date(req.query.startDate);
+        filter.createdAt.$gte = new Date(new Date(req.query.startDate).getTime() - LEGACY_PAIR_WINDOW_MS);
       }
       if (req.query.endDate) {
-        filter.createdAt.$lte = new Date(req.query.endDate);
+        filter.createdAt.$lte = new Date(new Date(req.query.endDate).getTime() + LEGACY_PAIR_WINDOW_MS);
       }
     }
 
-    let query = FundTransaction.find(filter)
+    const records = await FundTransaction.find(filter)
       .populate({ path: 'import_ticket_id', select: 'code' })
-      .sort({ createdAt: -1 });
+      .populate('related_transaction_id')
+      .sort({ createdAt: -1 })
+      .lean();
 
-    if (limit > 0) {
-      query = query.skip(skip).limit(limit);
+    // Include the topup if its withdrawal falls in the selected window but the
+    // second ledger write completed later, outside that window.
+    const withdrawalIds = records.filter(record => record.type === 'revenue_withdrawal').map(record => record._id);
+    if (withdrawalIds.length) {
+      const linkedTopups = await FundTransaction.find({ type: 'ad_topup', related_transaction_id: { $in: withdrawalIds } })
+        .populate('related_transaction_id').lean();
+      const existingIds = new Set(records.map(record => String(record._id)));
+      records.push(...linkedTopups.filter(record => !existingIds.has(String(record._id))));
     }
 
-    const transactions = await query;
-
-    const total = await FundTransaction.countDocuments(filter);
+    // Filter and paginate logical actions, not their individual ledger entries.
+    const history = filterFundHistory(groupFundHistory(records), req.query);
+    const total = history.length;
+    const transactions = limit > 0 ? history.slice(skip, skip + limit) : history;
 
     res.json({
       success: true,
       data: {
         transactions,
-        totalPages: Math.ceil(total / limit),
+        totalPages: limit > 0 ? Math.ceil(total / limit) : (total > 0 ? 1 : 0),
         currentPage: page,
         totalItems: total
       }

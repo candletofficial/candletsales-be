@@ -48,6 +48,12 @@ const fundTransactionSchema = new mongoose.Schema({
     ref: 'AdCost',
     default: null
   },
+  related_transaction_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FundTransaction',
+    index: true,
+    default: null
+  },
   note: {
     type: String,
     default: ''

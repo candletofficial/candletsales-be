@@ -10,6 +10,19 @@ const orderItemSchema = new mongoose.Schema({
   sku_label: { type: String, default: '' },        // VD: "Rosy Berry - Large"
   unit_price: { type: Number, required: true },    // giá bán tại thời điểm đặt
   unit_cost: { type: Number, default: 0 },          // giá vốn tại thời điểm đặt
+  // Per-unit recipe for this order item only; undefined uses the product recipe.
+  material_overrides: {
+    type: [{
+      ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },
+      quantity: { type: Number, required: true, min: 0 },
+      name: String,
+      unit: String,
+      unit_cost: { type: Number, min: 0 },
+      _id: false,
+    }],
+    default: undefined,
+  },
+  materials_key: { type: String },
   quantity: { type: Number, required: true, min: 1 }
 }, { _id: false });
 
@@ -20,6 +33,20 @@ const orderSchema = new mongoose.Schema({
     unique: true,
   },
   pancake_order_id: { type: String, default: null }, // To prevent duplicates
+  pancake_details: {
+    type: new mongoose.Schema({
+      customer_id: String, name: String, username: String,
+      phones: { type: [String], default: undefined },
+      emails: { type: [String], default: undefined },
+      recipient_name: String, recipient_phone: String, recipient_email: String,
+      address: String, street: String, commune: String, district: String, province: String, postcode: String,
+      source_name: String, page_name: String, carrier: String,
+      tracking_url: String, conversation_url: String, order_url: String, delivery_note: String,
+      order_count: Number, succeed_order_count: Number, returned_order_count: Number,
+      purchased_amount: Number, reward_point: Number, is_block: Boolean, synced_at: Date,
+    }, { _id: false }),
+    default: undefined,
+  },
   items: {
     type: [orderItemSchema],
     default: [],

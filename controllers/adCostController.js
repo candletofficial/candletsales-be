@@ -93,7 +93,7 @@ exports.topupPlatform = async (req, res, next) => {
       }
       
       // Rút tiền từ nền tảng (không cộng vào tài sản chung -> fund_change = 0)
-      await FundTransaction.create({
+      const withdrawal = await FundTransaction.create({
         type: 'revenue_withdrawal',
         amount: totalDeduction,
         fee: 0,
@@ -106,11 +106,12 @@ exports.topupPlatform = async (req, res, next) => {
       // Nạp tiền quảng cáo
       const transaction = new FundTransaction({
         type: 'ad_topup',
+        related_transaction_id: withdrawal._id,
         amount: Number(amount),
         fee: numFee,
         fund_change: 0,
         source: platform,
-        note: note || `Nạp tiền quảng cáo ${platform} từ tài sản riêng`,
+        note: note || `Nạp tiền quảng cáo từ số dư ${platform}`,
         created_by: created_by || 'Admin'
       });
       

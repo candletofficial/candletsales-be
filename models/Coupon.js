@@ -15,7 +15,7 @@ const couponSchema = new mongoose.Schema({
   },
   type: { 
     type: String, 
-    enum: ['percent', 'fixed'], 
+    enum: ['percent', 'fixed', 'freeship'],
     required: true 
   },
   value: { 
@@ -26,6 +26,16 @@ const couponSchema = new mongoose.Schema({
   max_discount: { 
     type: Number,
     default: null
+  },
+  // Absent on legacy freeship coupons, which continue to waive 100% of shipping.
+  shipping_discount_type: {
+    type: String,
+    enum: ['percent', 'fixed'],
+  },
+  min_order_value: {
+    type: Number,
+    min: [0, 'Giá trị đơn tối thiểu không được âm'],
+    default: 0,
   },
   quantity: { 
     type: Number, 

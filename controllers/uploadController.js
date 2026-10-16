@@ -1,5 +1,10 @@
 const path = require('path');
 const fs = require('fs');
+const {
+  uploadImageBuffer,
+  deleteCloudinaryImage,
+  getCloudinaryPublicId,
+} = require('../config/cloudinary');
 
 const uploadsBaseDir = path.join(__dirname, '..', 'uploads');
 
@@ -53,25 +58,28 @@ const removeFileIfLocal = (filePathOrUrl) => {
 /**
  * Upload 1 ảnh đại diện chính của sản phẩm
  */
-const uploadProductImage = (req, res) => {
+const toResponseFile = (file, uploadedImage) => ({
+  // Keep `path` for compatibility with the current frontend and product schema.
+  path: uploadedImage.secure_url,
+  url: uploadedImage.secure_url,
+  filename: uploadedImage.original_filename || file.originalname,
+  publicId: uploadedImage.public_id,
+  size: file.size,
+  mimetype: file.mimetype,
+});
+
+const uploadProductImage = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Vui lòng chọn một tệp ảnh để tải lên' });
     }
 
-    const relativePath = `/uploads/products/${req.file.filename}`;
-    const fullUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
+    const uploadedImage = await uploadImageBuffer(req.file);
 
     res.status(200).json({
       success: true,
       message: 'Tải ảnh sản phẩm lên thành công',
-      data: {
-        path: relativePath,
-        url: fullUrl,
-        filename: req.file.filename,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-      },
+      data: toResponseFile(req.file, uploadedImage),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -81,23 +89,14 @@ const uploadProductImage = (req, res) => {
 /**
  * Upload nhiều ảnh cho bộ sưu tập sản phẩm (Gallery)
  */
-const uploadProductImages = (req, res) => {
+const uploadProductImages = async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ success: false, message: 'Vui lòng chọn ít nhất một tệp ảnh' });
     }
 
-    const filesData = req.files.map((file) => {
-      const relativePath = `/uploads/products/${file.filename}`;
-      const fullUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
-      return {
-        path: relativePath,
-        url: fullUrl,
-        filename: file.filename,
-        size: file.size,
-        mimetype: file.mimetype,
-      };
-    });
+    const uploadedImages = await Promise.all(req.files.map((file) => uploadImageBuffer(file)));
+    const filesData = req.files.map((file, index) => toResponseFile(file, uploadedImages[index]));
 
     res.status(200).json({
       success: true,
@@ -112,7 +111,7 @@ const uploadProductImages = (req, res) => {
 /**
  * Xóa file ảnh trên máy chủ theo yêu cầu của client (khi bấm nút Xóa ảnh)
  */
-const deleteFile = (req, res) => {
+const deleteFile = async (req, res) => {
   try {
     const targetPath = req.body.path || req.query.path;
 
@@ -120,12 +119,15 @@ const deleteFile = (req, res) => {
       return res.status(400).json({ success: false, message: 'Thiếu đường dẫn tệp cần xóa (path)' });
     }
 
-    const isDeleted = removeFileIfLocal(targetPath);
+    const isCloudinaryImage = Boolean(getCloudinaryPublicId(targetPath));
+    const isDeleted = isCloudinaryImage
+      ? await deleteCloudinaryImage(targetPath)
+      : removeFileIfLocal(targetPath);
 
     res.status(200).json({
       success: true,
       message: isDeleted
-        ? 'Đã xóa tệp ảnh thành công khỏi máy chủ'
+        ? 'Đã xóa ảnh thành công'
         : 'Tệp không tồn tại hoặc đã được xóa trước đó',
       data: { path: targetPath, deleted: isDeleted },
     });
