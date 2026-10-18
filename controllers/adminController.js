@@ -6,6 +6,7 @@ const ImportTicket = require('../models/ImportTicket');
 const InventoryCheck = require('../models/InventoryCheck');
 const FundTransaction = require('../models/FundTransaction');
 const AffiliateFee = require('../models/AffiliateFee');
+const { filterOrphanOrderRevenue } = require('../utils/filterOrphanOrderRevenue');
 
 // @desc    Lấy danh sách tài khoản (hỗ trợ filter status, role, tìm kiếm)
 // @route   GET /api/admin/users
@@ -300,6 +301,7 @@ exports.getDashboardStats = async (req, res) => {
       FundTransaction.find({}).sort({ createdAt: -1 }).limit(5),
       AffiliateFee.find({})
     ]);
+    const visibleFundTransactions = await filterOrphanOrderRevenue(recentFundTransactions);
 
     // 1. Calculate main metrics
     const activeCurrent = ordersCurrent.filter(o => o.status !== 'returned');
@@ -618,8 +620,8 @@ exports.getDashboardStats = async (req, res) => {
       });
     });
 
-    if (recentFundTransactions) {
-      recentFundTransactions.forEach(ft => {
+    if (visibleFundTransactions) {
+      visibleFundTransactions.forEach(ft => {
         let title = 'Giao dịch quỹ';
         let type = 'fund';
         if (ft.type === 'admin_deposit') { title = 'Góp vốn quỹ'; type = 'deposit'; }
@@ -709,6 +711,7 @@ exports.getRecentActivities = async (req, res) => {
       InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
       FundTransaction.find({}).sort({ createdAt: -1 }).limit(5)
     ]);
+    const visibleFundTransactions = await filterOrphanOrderRevenue(recentFundTransactions);
 
     const recentActivities = [];
     recentOrders.forEach(o => {
@@ -746,8 +749,8 @@ exports.getRecentActivities = async (req, res) => {
       });
     });
 
-    if (recentFundTransactions) {
-      recentFundTransactions.forEach(ft => {
+    if (visibleFundTransactions) {
+      visibleFundTransactions.forEach(ft => {
         let title = 'Giao dịch quỹ';
         let type = 'fund';
         if (ft.type === 'admin_deposit') { title = 'Góp vốn quỹ'; type = 'deposit'; }

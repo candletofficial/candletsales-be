@@ -33,6 +33,8 @@ const orderSchema = new mongoose.Schema({
     unique: true,
   },
   pancake_order_id: { type: String, default: null }, // To prevent duplicates
+  tracking_enabled: { type: Boolean, default: false },
+  tracking_token: { type: String, unique: true, sparse: true, select: false },
   pancake_details: {
     type: new mongoose.Schema({
       customer_id: String, name: String, username: String,

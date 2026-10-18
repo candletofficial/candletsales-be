@@ -9,6 +9,7 @@ const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
 const { freeshipDiscount } = require('../utils/freeshipDiscount');
 const { itemMaterials, materialId, preserveOrderMaterials } = require('../utils/orderItemMaterials');
+const { newTrackingToken, trackingTransitionError } = require('../utils/orderTracking');
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -26,10 +27,11 @@ const calcStatus = (actualStock, minStock) => {
  * Tính toán lượng nguyên liệu cần trừ cho một item đơn hàng.
  * Trả về { deductions: Map<ingredient_id_string, totalQuantity>, packagingCost: Number }
  */
-const buildMaterialDeductions = async (items, shippingMethod = 'standard') => {
+const buildMaterialDeductions = async (items, shippingMethod = 'standard', session = null) => {
   // Gom product_id cần fetch
   const productIds = [...new Set(items.map(i => i.product_id))];
-  const products = await Product.find({ _id: { $in: productIds } });
+  const productQuery = Product.find({ _id: { $in: productIds } });
+  const products = await (session ? productQuery.session(session) : productQuery);
   const productMap = Object.fromEntries(products.map(p => [p._id.toString(), p]));
 
   // Map: materialId -> tổng lượng cần trừ
@@ -54,11 +56,13 @@ const buildMaterialDeductions = async (items, shippingMethod = 'standard') => {
   // 3. Trừ thêm nguyên liệu theo phương thức vận chuyển
   let packagingCost = 0;
   if (shippingMethod) {
-    const shippingConfig = await ShippingConfig.findOne({ method: shippingMethod });
+    const shippingQuery = ShippingConfig.findOne({ method: shippingMethod });
+    const shippingConfig = await (session ? shippingQuery.session(session) : shippingQuery);
     if (shippingConfig && shippingConfig.materials && shippingConfig.materials.length > 0) {
       for (const sm of shippingConfig.materials) {
         addDeduct(sm.material_id, sm.quantity);
-        const mat = await Material.findById(sm.material_id);
+        const materialQuery = Material.findById(sm.material_id);
+        const mat = await (session ? materialQuery.session(session) : materialQuery);
         if (mat) {
           packagingCost += (mat.price || 0) * sm.quantity;
         }
@@ -187,7 +191,7 @@ exports.createConfirmedTransferOrder = async (session, transactionId) => {
 // GET /api/orders
 exports.getOrders = async (req, res, next) => {
   try {
-    const orders = await Order.find().sort({ ordered_at: -1 });
+    const orders = await Order.find().select('+tracking_token').sort({ ordered_at: -1 });
     res.status(200).json({ success: true, data: orders });
   } catch (error) {
     next(error);
@@ -197,7 +201,7 @@ exports.getOrders = async (req, res, next) => {
 // GET /api/orders/:id
 exports.getOrder = async (req, res, next) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findById(req.params.id).select('+tracking_token');
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
@@ -210,6 +214,10 @@ exports.getOrder = async (req, res, next) => {
 // POST /api/orders
 exports.createOrder = async (req, res, next) => {
   try {
+    const createTracking = req.body.create_tracking_link === true;
+    if (createTracking && req.user?.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Chỉ quản trị viên được tạo link theo dõi.' });
+    }
     let { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, user_id, payment_method, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
     if (Array.isArray(items)) items = preserveOrderMaterials(items);
     req.body.items = items;
@@ -311,7 +319,7 @@ exports.createOrder = async (req, res, next) => {
     }
 
     // A real QR order is created only by the verified payment webhook.
-    if (source === 'website' && payment_method === 'transfer' && !req.internalPaymentConfirmation) {
+    if (source === 'website' && payment_method === 'transfer' && !req.internalPaymentConfirmation && !createTracking) {
       return createTransferPaymentSession(req, res, next);
     }
 
@@ -350,8 +358,8 @@ exports.createOrder = async (req, res, next) => {
     }
 
     const isWebsite = (source === 'website');
-    const initialDeliveryStatus = req.body.delivery_status || (isWebsite ? 'pending' : 'delivered');
-    const initialStatus = req.body.status || (isWebsite ? 'pending' : 'completed');
+    const initialDeliveryStatus = createTracking ? 'pending' : req.body.delivery_status || (isWebsite ? 'pending' : 'delivered');
+    const initialStatus = createTracking ? 'pending' : req.body.status || (isWebsite ? 'pending' : 'completed');
     const isWebsiteTransfer = isWebsite && payment_method === 'transfer';
     const confirmedPayment = req.internalPaymentConfirmation;
     // SePay extracts this exact code from the transfer description. Keep it
@@ -363,6 +371,8 @@ exports.createOrder = async (req, res, next) => {
     // 2. Tạo đơn hàng
     const order = await Order.create({
       orderId,
+      tracking_enabled: createTracking,
+      tracking_token: createTracking ? newTrackingToken() : undefined,
       items: items || [],
       total_price: total_price || 0,
       logistics_cost: logistics_cost || 0,
@@ -417,7 +427,7 @@ exports.createOrder = async (req, res, next) => {
 
     // Tự động chuyển doanh thu POS (Chuyển khoản), Facebook, Instagram vào Tài sản chung
     const isAutoFund = (order.source === 'pos' && order.payment_method === 'transfer') || order.source === 'facebook' || order.source === 'instagram';
-    if (isAutoFund && order.total_price > 0) {
+    if (isAutoFund && order.total_price > 0 && (!order.tracking_enabled || order.status === 'completed')) {
       const sourceName = order.source === 'pos' ? 'POS Chuyển khoản' : (order.source === 'facebook' ? 'Facebook' : 'Instagram');
       await FundTransaction.create({
         type: 'revenue_withdrawal',
@@ -506,6 +516,11 @@ exports.updateOrder = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
     if (Array.isArray(items)) items = preserveOrderMaterials(items, oldOrder.items);
+    const transitionError = trackingTransitionError(oldOrder, delivery_status);
+    if (transitionError) return res.status(400).json({ success: false, message: transitionError });
+    if (oldOrder.tracking_enabled && status && status !== oldOrder.status) {
+      return res.status(400).json({ success: false, message: 'Hãy cập nhật đơn này bằng trạng thái giao hàng.' });
+    }
 
     // Check the resulting channel before any inventory or accounting changes.
     if ((source || oldOrder.source) !== 'website' && discount_code) {
@@ -729,7 +744,7 @@ exports.updateOrder = async (req, res, next) => {
         // Hoàn lại toàn bộ nguyên liệu vào kho
         if (oldOrder.status !== 'cancelled' && oldOrder.status !== 'returned') {
           try {
-            const { deductions: refunds } = await buildMaterialDeductions(oldOrder.items, oldOrder.shippingMethod);
+            const { deductions: refunds } = await buildMaterialDeductions(oldOrder.tracking_enabled ? items : oldOrder.items, shippingMethod || oldOrder.shippingMethod);
             const updatePromises = [];
             for (const [materialId, refundQty] of refunds.entries()) {
               updatePromises.push((async () => {
@@ -773,6 +788,8 @@ exports.updateOrder = async (req, res, next) => {
         }
       }
       updateData.delivery_status = delivery_status;
+      if (oldOrder.tracking_enabled && ['pending', 'confirmed', 'shipping'].includes(delivery_status)) updateData.status = 'pending';
+      if (oldOrder.tracking_enabled && delivery_status === 'cancelled') updateData.cancelled_reason = req.body.cancelled_reason || 'Đã huỷ theo yêu cầu';
     } else if (status) {
       updateData.status = status;
     }
@@ -850,7 +867,7 @@ exports.updateOrder = async (req, res, next) => {
     const autoFundSources = ['pos', 'facebook', 'instagram'];
     const existingAutoTxList = await FundTransaction.find({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: autoFundSources } });
     
-    if (isAutoFund && order.total_price > 0) {
+    if (isAutoFund && order.total_price > 0 && (!order.tracking_enabled || order.status === 'completed')) {
       const sourceName = order.source === 'pos' ? 'POS Chuyển khoản' : (order.source === 'facebook' ? 'Facebook' : 'Instagram');
       
       if (existingAutoTxList.length > 0) {
@@ -920,65 +937,53 @@ exports.updateOrder = async (req, res, next) => {
 
 // DELETE /api/orders/:id
 exports.deleteOrder = async (req, res, next) => {
+  let session;
   try {
     const { restoreStock } = req.query;
-    const order = await Order.findByIdAndDelete(req.params.id);
+    session = await Order.startSession();
+    let order;
+    let alreadyRefunded = false;
+    await session.withTransaction(async () => {
+      order = await Order.findById(req.params.id).session(session);
+      if (!order) return;
+      alreadyRefunded = ['returned', 'cancelled'].includes(order.status)
+        || ['failed', 'cancelled'].includes(order.delivery_status);
+
+      // Keep the order, ledger cleanup and optional stock refund in one commit.
+      // A failure must not leave financial entries pointing at a deleted order.
+      await Order.deleteOne({ _id: order._id }, { session });
+      await FundTransaction.deleteMany({
+        order_id: order._id,
+        $or: [
+          { type: { $in: ['order_revenue', 'seeding_payment', 'shipping_payment'] } },
+          { type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } },
+        ],
+      }, { session });
+
+      if (restoreStock === 'true' && !alreadyRefunded) {
+        const { deductions: refunds } = await buildMaterialDeductions(order.items, order.shippingMethod, session);
+        for (const [materialId, refundQty] of refunds.entries()) {
+          const mat = await Material.findById(materialId).session(session);
+          if (!mat) continue;
+          const newStock = Number((mat.stock + refundQty).toFixed(4));
+          const newActual = Number((mat.actualStock + refundQty).toFixed(4));
+          await Material.findByIdAndUpdate(materialId, {
+            stock: newStock, actualStock: newActual,
+            status: calcStatus(newActual, mat.minStock),
+          }, { session });
+        }
+      }
+    });
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
-
-    // Hoàn lại tiền vào Tài sản chung nếu là đơn seeding
-    if (order.is_seeding) {
-      await FundTransaction.deleteMany({ order_id: order._id, type: 'seeding_payment' });
-    }
-    
-    // Hoàn lại phí ship vào Tài sản chung
-    if (order.logistics_cost > 0) {
-      await FundTransaction.deleteMany({ order_id: order._id, type: 'shipping_payment' });
-    }
-
-    // Xóa giao dịch tự động chuyển doanh thu nếu có
-    await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } });
-
-    // Chỉ hoàn kho khi đơn CHƯA bị hoàn (completed).
-    // Đơn đã hoàn (returned) thì nguyên liệu đã được trả lại khi markAsReturned → không hoàn thêm.
-    const isReturned = order.status === 'returned';
-
-    if (restoreStock === 'true' && !isReturned) {
-      try {
-        const { deductions: refunds } = await buildMaterialDeductions(order.items, order.shippingMethod);
-        const updatePromises = [];
-        for (const [materialId, refundQty] of refunds.entries()) {
-          updatePromises.push(
-            (async () => {
-              const mat = await Material.findById(materialId);
-              if (!mat) return;
-
-              const newStock = Number((mat.stock + refundQty).toFixed(4));
-              const newActual = Number((mat.actualStock + refundQty).toFixed(4));
-              const newStatus = calcStatus(newActual, mat.minStock);
-
-              await Material.findByIdAndUpdate(materialId, {
-                stock: newStock,
-                actualStock: newActual,
-                status: newStatus,
-              });
-            })()
-          );
-        }
-        await Promise.all(updatePromises);
-      } catch (refundErr) {
-        console.error('[deleteOrder] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
-      }
-    }
-
-    const msg = isReturned
-      ? 'Đã xóa đơn hàng bị hoàn (nguyên liệu đã được hoàn trước đó)'
+    const msg = alreadyRefunded
+      ? 'Đã xóa đơn hàng (nguyên liệu đã được hoàn trước đó)'
       : 'Đã xóa đơn hàng' + (restoreStock === 'true' ? ' và hoàn lại nguyên liệu' : '');
     res.status(200).json({ success: true, message: msg });
   } catch (error) {
     next(error);
-  }
+  } finally { if (session) await session.endSession(); }
 };
 
 exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
@@ -1119,6 +1124,11 @@ exports.updateDeliveryStatus = async (req, res, next) => {
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
+    if (delivery_status && delivery_status !== order.delivery_status && ['returned', 'cancelled'].includes(order.status)) {
+      return res.status(400).json({ success: false, message: 'Đơn đã hoàn hoặc huỷ không thể đổi trạng thái giao hàng vì nguyên liệu đã được hoàn kho.' });
+    }
+    const transitionError = trackingTransitionError(order, delivery_status);
+    if (transitionError) return res.status(400).json({ success: false, message: transitionError });
 
     // Nếu có cập nhật orderId mới từ app giao vận bên ngoài
     if (orderId && orderId.trim() && orderId.trim() !== order.orderId) {
@@ -1261,6 +1271,19 @@ exports.updateDeliveryStatus = async (req, res, next) => {
             created_by: req.user?.username || 'Admin'
           });
         }
+      }
+
+      // Tracked manual orders defer automatic collection until delivery succeeds.
+      const collectToFund = order.tracking_enabled && order.total_price > 0 &&
+        ((order.source === 'pos' && order.payment_method === 'transfer') || ['facebook', 'instagram'].includes(order.source));
+      if (collectToFund) {
+        const existingCollection = await FundTransaction.findOne({ order_id: order._id, type: 'revenue_withdrawal' });
+        if (!existingCollection) await FundTransaction.create({
+          type: 'revenue_withdrawal', amount: order.total_price, fee: 0,
+          fund_change: order.total_price, source: order.source, order_id: order._id,
+          note: `Tự động chuyển doanh thu ${order.source} đơn ${order.orderId}`,
+          created_by: req.user?.username || 'Admin',
+        });
       }
 
       return res.status(200).json({ 

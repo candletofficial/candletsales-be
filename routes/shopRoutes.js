@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const shopController = require('../controllers/shopController');
 const orderController = require('../controllers/orderController');
+const { getTrackingOrder } = require('../controllers/orderTrackingController');
 
 router.get('/products', shopController.getShopProducts);
 router.get('/products/:id', shopController.getShopProductById);
@@ -12,6 +13,7 @@ router.get('/payment-sessions/:orderReference', orderController.getPaymentSessio
 
 // Customer Order Tracking & History
 router.get('/orders', orderController.getShopOrders);
+router.get('/order-tracking/:token', getTrackingOrder);
 router.get('/orders/:id', orderController.getShopOrderById);
 router.patch('/orders/:id/cancel', orderController.cancelShopOrder);
 

@@ -3,6 +3,7 @@ const Order = require('../models/Order');
 const ImportTicket = require('../models/ImportTicket');
 const mongoose = require('mongoose');
 const { groupFundHistory, filterFundHistory, LEGACY_PAIR_WINDOW_MS } = require('../utils/groupFundHistory');
+const { filterOrphanOrderRevenue } = require('../utils/filterOrphanOrderRevenue');
 
 const PLATFORMS = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
 
@@ -145,7 +146,8 @@ exports.getTransactions = async (req, res) => {
     }
 
     // Filter and paginate logical actions, not their individual ledger entries.
-    const history = filterFundHistory(groupFundHistory(records), req.query);
+    const validRecords = await filterOrphanOrderRevenue(records);
+    const history = filterFundHistory(groupFundHistory(validRecords), req.query);
     const total = history.length;
     const transactions = limit > 0 ? history.slice(skip, skip + limit) : history;
 

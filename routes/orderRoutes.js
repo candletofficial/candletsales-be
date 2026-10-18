@@ -13,11 +13,13 @@ const {
 
 const { protect, adminOnly } = require('../middlewares/authMiddleware');
 const { getItemMaterials, updateItemMaterials } = require('../controllers/orderMaterialsController');
+const { createTrackingLink } = require('../controllers/orderTrackingController');
 
 router.use(protect, adminOnly);
 
 router.route('/').get(getOrders).post(createOrder);
 router.route('/:id').get(getOrder).put(updateOrder).delete(deleteOrder);
+router.post('/:id/tracking-link', createTrackingLink);
 router.route('/:id/items/:index/materials').get(getItemMaterials).put(updateItemMaterials);
 router.route('/:id/return').patch(markAsReturned);
 router.route('/:id/delivery-status').patch(updateDeliveryStatus);
