@@ -45,6 +45,99 @@ test('social login redirects use the first configured CLIENT_URL origin', async 
   }
 });
 
+test('Google callback returns to the configured frontend origin where login started', async () => {
+  const originalEnv = {
+    CLIENT_URL: process.env.CLIENT_URL,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
+    JWT_SECRET: process.env.JWT_SECRET,
+  };
+
+  process.env.CLIENT_URL = 'https://candlet.shop,https://www.candlet.shop';
+  process.env.GOOGLE_CLIENT_ID = 'test-client';
+  process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
+  process.env.GOOGLE_REDIRECT_URI = 'https://api.candlet.shop/api/auth/google/callback';
+  process.env.JWT_SECRET = 'test-jwt-secret';
+
+  try {
+    const state = jwt.sign(
+      {
+        purpose: 'google-oauth',
+        returnTo: '/account',
+        clientOrigin: 'https://www.candlet.shop',
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+    const response = makeResponse();
+
+    await authController.googleCallback(
+      {
+        headers: { cookie: `google_oauth_state=${state}` },
+        query: { state, error: 'access_denied' },
+      },
+      response
+    );
+
+    assert.match(
+      response.result.location,
+      /^https:\/\/www\.candlet\.shop\/login\/google\/callback#/
+    );
+    const fragment = new URL(response.result.location).hash.slice(1);
+    assert.equal(new URLSearchParams(fragment).get('returnTo'), '/account');
+  } finally {
+    for (const [name, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('Google callback rejects an unconfigured frontend origin', async () => {
+  const originalEnv = {
+    CLIENT_URL: process.env.CLIENT_URL,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
+    JWT_SECRET: process.env.JWT_SECRET,
+  };
+
+  process.env.CLIENT_URL = 'https://candlet.shop,https://www.candlet.shop';
+  process.env.GOOGLE_CLIENT_ID = 'test-client';
+  process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
+  process.env.GOOGLE_REDIRECT_URI = 'https://api.candlet.shop/api/auth/google/callback';
+  process.env.JWT_SECRET = 'test-jwt-secret';
+
+  try {
+    const state = jwt.sign(
+      { purpose: 'google-oauth', returnTo: '/', clientOrigin: 'https://attacker.example' },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+    const response = makeResponse();
+
+    await authController.googleCallback(
+      {
+        headers: { cookie: `google_oauth_state=${state}` },
+        query: { state, error: 'access_denied' },
+      },
+      response
+    );
+
+    assert.match(
+      response.result.location,
+      /^https:\/\/candlet\.shop\/login\/google\/callback#/
+    );
+    assert.equal(response.result.location.includes('attacker.example'), false);
+  } finally {
+    for (const [name, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test('Google token exchange errors return a safe, actionable message', async () => {
   const originalEnv = {
     CLIENT_URL: process.env.CLIENT_URL,

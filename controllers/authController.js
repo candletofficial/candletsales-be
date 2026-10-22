@@ -36,10 +36,20 @@ const getCookie = (req, name) => {
     ?.slice(prefix.length);
 };
 
-const getCustomerClientUrl = () => String(process.env.CLIENT_URL || 'http://localhost:5173')
-  .split(',')[0]
-  .trim()
-  .replace(/\/+$/, '');
+const getConfiguredClientUrls = () => String(process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')
+  .map((value) => value.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+// localStorage is isolated by origin. Preserve the exact configured frontend
+// origin where OAuth started so www and apex domains do not lose the JWT.
+const getCustomerClientUrl = (requestedOrigin) => {
+  const configuredUrls = getConfiguredClientUrls();
+  const normalizedOrigin = String(requestedOrigin || '').trim().replace(/\/+$/, '');
+  return configuredUrls.includes(normalizedOrigin)
+    ? normalizedOrigin
+    : (configuredUrls[0] || 'http://localhost:5173');
+};
 
 const getGoogleOAuthErrorMessage = (error) => {
   const code = String(error?.oauthCode || '').toLowerCase();
@@ -57,20 +67,20 @@ const getGoogleOAuthErrorMessage = (error) => {
   return 'Không thể đăng nhập Google. Vui lòng thử lại.';
 };
 
-const redirectFacebookResult = (res, { token, error, returnTo = '/' }) => {
+const redirectFacebookResult = (res, { token, error, returnTo = '/', clientOrigin }) => {
   const params = new URLSearchParams();
   if (token) params.set('token', token);
   if (error) params.set('error', error);
   params.set('returnTo', safeCustomerReturnPath(returnTo));
-  return res.redirect(`${getCustomerClientUrl()}/login/facebook/callback#${params.toString()}`);
+  return res.redirect(`${getCustomerClientUrl(clientOrigin)}/login/facebook/callback#${params.toString()}`);
 };
 
-const redirectGoogleResult = (res, { token, error, returnTo = '/' }) => {
+const redirectGoogleResult = (res, { token, error, returnTo = '/', clientOrigin }) => {
   const params = new URLSearchParams();
   if (token) params.set('token', token);
   if (error) params.set('error', error);
   params.set('returnTo', safeCustomerReturnPath(returnTo));
-  return res.redirect(`${getCustomerClientUrl()}/login/google/callback#${params.toString()}`);
+  return res.redirect(`${getCustomerClientUrl(clientOrigin)}/login/google/callback#${params.toString()}`);
 };
 
 const findOrCreateSocialCustomer = async ({ provider, providerId, email, name }) => {
@@ -124,8 +134,9 @@ exports.startFacebookLogin = (req, res) => {
   }
 
   const returnTo = safeCustomerReturnPath(req.query.returnTo);
+  const clientOrigin = getCustomerClientUrl(req.query.clientOrigin);
   const state = jwt.sign(
-    { nonce: crypto.randomBytes(24).toString('hex'), returnTo, purpose: 'facebook-oauth' },
+    { nonce: crypto.randomBytes(24).toString('hex'), returnTo, clientOrigin, purpose: 'facebook-oauth' },
     process.env.JWT_SECRET,
     { expiresIn: '10m' }
   );
@@ -152,6 +163,7 @@ exports.startFacebookLogin = (req, res) => {
 exports.facebookCallback = async (req, res) => {
   const clearState = () => res.clearCookie('facebook_oauth_state', { path: '/api/auth/facebook' });
   let returnTo = '/';
+  let clientOrigin;
 
   try {
     const config = getFacebookConfig();
@@ -165,13 +177,14 @@ exports.facebookCallback = async (req, res) => {
     const state = jwt.verify(stateFromQuery, process.env.JWT_SECRET);
     if (state.purpose !== 'facebook-oauth') throw new Error('Invalid Facebook OAuth state');
     returnTo = safeCustomerReturnPath(state.returnTo);
+    clientOrigin = getCustomerClientUrl(state.clientOrigin);
     clearState();
 
     if (req.query.error) {
-      return redirectFacebookResult(res, { error: 'Bạn đã huỷ hoặc từ chối đăng nhập bằng Facebook.', returnTo });
+      return redirectFacebookResult(res, { error: 'Bạn đã huỷ hoặc từ chối đăng nhập bằng Facebook.', returnTo, clientOrigin });
     }
     if (!req.query.code) {
-      return redirectFacebookResult(res, { error: 'Facebook không trả về mã xác thực.', returnTo });
+      return redirectFacebookResult(res, { error: 'Facebook không trả về mã xác thực.', returnTo, clientOrigin });
     }
 
     const accessTokenUrl = new URL('https://graph.facebook.com/oauth/access_token');
@@ -190,23 +203,23 @@ exports.facebookCallback = async (req, res) => {
     const profile = await profileResponse.json();
     if (!profileResponse.ok || !profile.id) throw new Error('Facebook profile lookup failed');
     if (!profile.email) {
-      return redirectFacebookResult(res, { error: 'Facebook chưa cấp email. Hãy cấp quyền email hoặc đăng nhập bằng email.', returnTo });
+      return redirectFacebookResult(res, { error: 'Facebook chưa cấp email. Hãy cấp quyền email hoặc đăng nhập bằng email.', returnTo, clientOrigin });
     }
 
     let user;
     try {
       user = await findOrCreateSocialCustomer({ provider: 'facebook', providerId: profile.id, email: profile.email, name: profile.name });
     } catch (error) {
-      if (error.code === 'SOCIAL_LOGIN_ADMIN_ACCOUNT') return redirectFacebookResult(res, { error: 'Facebook Login chỉ hỗ trợ tài khoản khách hàng.', returnTo });
-      if (error.code === 'SOCIAL_LOGIN_INACTIVE_ACCOUNT') return redirectFacebookResult(res, { error: 'Tài khoản hiện chưa thể đăng nhập. Vui lòng liên hệ shop.', returnTo });
+      if (error.code === 'SOCIAL_LOGIN_ADMIN_ACCOUNT') return redirectFacebookResult(res, { error: 'Facebook Login chỉ hỗ trợ tài khoản khách hàng.', returnTo, clientOrigin });
+      if (error.code === 'SOCIAL_LOGIN_INACTIVE_ACCOUNT') return redirectFacebookResult(res, { error: 'Tài khoản hiện chưa thể đăng nhập. Vui lòng liên hệ shop.', returnTo, clientOrigin });
       throw error;
     }
 
-    return redirectFacebookResult(res, { token: signToken(user._id), returnTo });
+    return redirectFacebookResult(res, { token: signToken(user._id), returnTo, clientOrigin });
   } catch (error) {
     console.error('[facebook-login] OAuth failed:', error.message);
     clearState();
-    return redirectFacebookResult(res, { error: 'Không thể đăng nhập Facebook. Vui lòng thử lại.', returnTo });
+    return redirectFacebookResult(res, { error: 'Không thể đăng nhập Facebook. Vui lòng thử lại.', returnTo, clientOrigin });
   }
 };
 
@@ -218,8 +231,9 @@ exports.startGoogleLogin = (req, res) => {
   if (!config) return res.status(503).send('Google Login chưa được cấu hình.');
 
   const returnTo = safeCustomerReturnPath(req.query.returnTo);
+  const clientOrigin = getCustomerClientUrl(req.query.clientOrigin);
   const state = jwt.sign(
-    { nonce: crypto.randomBytes(24).toString('hex'), returnTo, purpose: 'google-oauth' },
+    { nonce: crypto.randomBytes(24).toString('hex'), returnTo, clientOrigin, purpose: 'google-oauth' },
     process.env.JWT_SECRET,
     { expiresIn: '10m' }
   );
@@ -247,6 +261,7 @@ exports.startGoogleLogin = (req, res) => {
 exports.googleCallback = async (req, res) => {
   const clearState = () => res.clearCookie('google_oauth_state', { path: '/api/auth/google' });
   let returnTo = '/';
+  let clientOrigin;
 
   try {
     const config = getGoogleConfig();
@@ -260,10 +275,11 @@ exports.googleCallback = async (req, res) => {
     const state = jwt.verify(stateFromQuery, process.env.JWT_SECRET);
     if (state.purpose !== 'google-oauth') throw new Error('Invalid Google OAuth state');
     returnTo = safeCustomerReturnPath(state.returnTo);
+    clientOrigin = getCustomerClientUrl(state.clientOrigin);
     clearState();
 
-    if (req.query.error) return redirectGoogleResult(res, { error: 'Bạn đã huỷ hoặc từ chối đăng nhập bằng Google.', returnTo });
-    if (!req.query.code) return redirectGoogleResult(res, { error: 'Google không trả về mã xác thực.', returnTo });
+    if (req.query.error) return redirectGoogleResult(res, { error: 'Bạn đã huỷ hoặc từ chối đăng nhập bằng Google.', returnTo, clientOrigin });
+    if (!req.query.code) return redirectGoogleResult(res, { error: 'Google không trả về mã xác thực.', returnTo, clientOrigin });
 
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -289,19 +305,19 @@ exports.googleCallback = async (req, res) => {
     const ticket = await client.verifyIdToken({ idToken: tokenData.id_token, audience: config.clientId });
     const profile = ticket.getPayload();
     if (!profile?.sub || !profile.email || !profile.email_verified) {
-      return redirectGoogleResult(res, { error: 'Google không cung cấp email đã xác minh cho tài khoản này.', returnTo });
+      return redirectGoogleResult(res, { error: 'Google không cung cấp email đã xác minh cho tài khoản này.', returnTo, clientOrigin });
     }
 
     let user;
     try {
       user = await findOrCreateSocialCustomer({ provider: 'google', providerId: profile.sub, email: profile.email, name: profile.name });
     } catch (error) {
-      if (error.code === 'SOCIAL_LOGIN_ADMIN_ACCOUNT') return redirectGoogleResult(res, { error: 'Google Login chỉ hỗ trợ tài khoản khách hàng.', returnTo });
-      if (error.code === 'SOCIAL_LOGIN_INACTIVE_ACCOUNT') return redirectGoogleResult(res, { error: 'Tài khoản hiện chưa thể đăng nhập. Vui lòng liên hệ shop.', returnTo });
+      if (error.code === 'SOCIAL_LOGIN_ADMIN_ACCOUNT') return redirectGoogleResult(res, { error: 'Google Login chỉ hỗ trợ tài khoản khách hàng.', returnTo, clientOrigin });
+      if (error.code === 'SOCIAL_LOGIN_INACTIVE_ACCOUNT') return redirectGoogleResult(res, { error: 'Tài khoản hiện chưa thể đăng nhập. Vui lòng liên hệ shop.', returnTo, clientOrigin });
       throw error;
     }
 
-    return redirectGoogleResult(res, { token: signToken(user._id), returnTo });
+    return redirectGoogleResult(res, { token: signToken(user._id), returnTo, clientOrigin });
   } catch (error) {
     console.error('[google-login] OAuth failed:', {
       stage: error.stage || 'callback',
@@ -309,7 +325,7 @@ exports.googleCallback = async (req, res) => {
       message: error.message,
     });
     clearState();
-    return redirectGoogleResult(res, { error: getGoogleOAuthErrorMessage(error), returnTo });
+    return redirectGoogleResult(res, { error: getGoogleOAuthErrorMessage(error), returnTo, clientOrigin });
   }
 };
 
