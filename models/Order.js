@@ -55,6 +55,9 @@ const orderSchema = new mongoose.Schema({
   },
   total_price: { type: Number, required: true, min: 0 }, // admin có thể chỉnh tay
   logistics_cost: { type: Number, default: 0 },
+  // Missing on legacy admin orders whose total_price included logistics_cost.
+  // Normalized orders keep shop-paid shipping outside the customer total.
+  total_excludes_logistics: { type: Boolean, default: undefined },
   source: { 
     type: String, 
     enum: ['pos', 'shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'website', 'khác'], 

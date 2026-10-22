@@ -362,6 +362,8 @@ exports.createOrder = async (req, res, next) => {
     const initialStatus = createTracking ? 'pending' : req.body.status || (isWebsite ? 'pending' : 'completed');
     const isWebsiteTransfer = isWebsite && payment_method === 'transfer';
     const confirmedPayment = req.internalPaymentConfirmation;
+    const isManualTransfer = !isWebsite && payment_method === 'transfer';
+    const isPaidPayment = Boolean(confirmedPayment) || isManualTransfer;
     // SePay extracts this exact code from the transfer description. Keep it
     // compact (DH + seven digits) so it matches the dashboard code pattern.
     const paymentCode = isWebsiteTransfer
@@ -376,6 +378,7 @@ exports.createOrder = async (req, res, next) => {
       items: items || [],
       total_price: total_price || 0,
       logistics_cost: logistics_cost || 0,
+      total_excludes_logistics: source === 'website' ? undefined : true,
       source: source || 'khác',
       status: initialStatus,
       delivery_status: initialDeliveryStatus,
@@ -385,10 +388,10 @@ exports.createOrder = async (req, res, next) => {
       customer_address: customer_address || '',
       user_id: user_id || null,
       payment_method: payment_method || 'cash',
-      payment_status: confirmedPayment ? 'paid' : 'pending',
+      payment_status: isPaidPayment ? 'paid' : 'pending',
       payment_code: paymentCode,
       payment_transaction_id: confirmedPayment ? confirmedPayment.transactionId : null,
-      paid_at: confirmedPayment ? new Date() : null,
+      paid_at: isPaidPayment ? new Date() : null,
       shippingMethod: shippingMethod || 'standard',
       shipping_fee: shipping_fee || 0,
       packaging_cost: packagingCost,
@@ -696,7 +699,8 @@ exports.updateOrder = async (req, res, next) => {
     const updateData = { 
       items: items || [], 
       total_price: total_price || 0, 
-      logistics_cost, 
+      logistics_cost,
+      total_excludes_logistics: (source || oldOrder.source) === 'website' ? undefined : true,
       source, 
       pos_mode, 
       customer_name, 
@@ -713,6 +717,15 @@ exports.updateOrder = async (req, res, next) => {
       discount_amount: discount_amount || 0, 
       discount_code: discount_code || null 
     };
+
+    // SePay belongs only to website checkout. An admin-created transfer is
+    // already confirmed by the admin and must never remain payment-pending.
+    const resultingSource = source || oldOrder.source;
+    const resultingPaymentMethod = payment_method || oldOrder.payment_method;
+    if (resultingSource !== 'website' && resultingPaymentMethod === 'transfer') {
+      updateData.payment_status = 'paid';
+      updateData.paid_at = oldOrder.paid_at || new Date();
+    }
 
     if (req.body.orderId && req.body.orderId.trim()) {
       const newOrderId = req.body.orderId.trim();
@@ -1401,7 +1414,9 @@ exports.markAsRefunded = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
 
-    if (order.payment_method !== 'transfer' || order.payment_status !== 'paid') {
+    const isPaidTransfer = order.payment_method === 'transfer'
+      && (order.payment_status === 'paid' || order.source !== 'website');
+    if (!isPaidTransfer) {
       return res.status(400).json({
         success: false,
         message: 'Chỉ có thể hoàn tiền cho đơn chuyển khoản đã thanh toán.'

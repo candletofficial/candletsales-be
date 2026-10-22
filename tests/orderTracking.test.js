@@ -49,6 +49,7 @@ test('manual tracked creation starts pending with an opaque link and does not bo
     assert.equal(res.body.data.status, 'pending');
     assert.match(res.body.data.tracking_token, /^[a-f0-9]{48}$/);
     assert.equal(res.body.data.tracking_enabled, true);
+    assert.equal(res.body.data.payment_status, source === 'website' ? 'pending' : 'paid');
   }
   assert.equal(FundTransaction.create.mock.callCount(), 0);
 });
@@ -59,6 +60,17 @@ test('ordinary manual creation retains its previous completed behavior', async (
   assert.equal(res.body.data.status, 'completed');
   assert.equal(res.body.data.delivery_status, 'delivered');
   assert.equal(res.body.data.tracking_token, undefined);
+});
+
+test('manual bank transfers are paid immediately without a SePay payment code', async () => {
+  const res = response();
+  await createOrder({ user: { role: 'admin' }, body: {
+    items: [item], total_price: 100000, source: 'khác', payment_method: 'transfer',
+  } }, res, fail);
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.data.payment_status, 'paid');
+  assert.equal(res.body.data.payment_code, undefined);
+  assert.ok(res.body.data.paid_at instanceof Date);
 });
 
 test('public checkout cannot request admin tracking creation', async () => {
@@ -159,7 +171,7 @@ test('link generation rejects missing orders and Pancake orders', async () => {
 
 test('public tracking only returns customer-facing fields and reflects status changes', async () => {
   const order = makeOrder();
-  Object.assign(order, { note: 'Internal', customer_phone: 'private', customer_address: 'private', pancake_details: { name: 'private' } });
+  Object.assign(order, { note: 'Internal', customer_name: 'Test customer', customer_phone: '0363491508', customer_address: '124/29 Xóm Chiếu, Quận 4', pancake_details: { name: 'private' } });
   order.items[0] = { ...item, unit_cost: 50000, material_overrides: [{ secret: true }] };
   mock.method(Order, 'findOne', async query => {
     assert.deepEqual(query, { tracking_token: order.tracking_token, tracking_enabled: true });
@@ -172,6 +184,9 @@ test('public tracking only returns customer-facing fields and reflects status ch
     assert.equal(res.body.data.delivery_status, status);
     assert.equal(res.headers['Cache-Control'], 'no-store');
     for (const field of ['note', 'customer_phone', 'customer_address', 'pancake_details', 'tracking_token', '_id']) assert.equal(res.body.data[field], undefined);
+    assert.deepEqual(res.body.data.customer, {
+      name: 'Test customer', phone: '0363491508', address: '124/29 Xóm Chiếu, Quận 4',
+    });
     assert.equal(res.body.data.items[0].unit_cost, undefined);
     assert.equal(res.body.data.items[0].material_overrides, undefined);
   }

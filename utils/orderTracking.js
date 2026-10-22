@@ -25,6 +25,11 @@ function publicTrackingOrder(order) {
     updated_at: order.updatedAt,
     total_price: order.total_price,
     shippingMethod: order.shippingMethod,
+    customer: {
+      name: order.customer_name || '',
+      phone: order.customer_phone || '',
+      address: order.customer_address || '',
+    },
     items: (order.items || []).map(item => ({
       product_name: item.product_name, product_image: item.product_image,
       sku_label: item.sku_label, quantity: item.quantity, unit_price: item.unit_price,
