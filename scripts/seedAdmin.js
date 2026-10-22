@@ -1,54 +1,54 @@
 /**
- * Script tạo tài khoản admin mặc định
- * Chạy: node scripts/seedAdmin.js
- *
- * Tài khoản này sẽ có:
- * - status = 'active'   (đăng nhập được ngay)
- * - isDefaultAdmin = true (không thể bị xóa/thu hồi)
+ * Tạo tài khoản admin mặc định.
+ * Chạy: npm run seed:admin
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const mongoose = require('mongoose');
 const User = require('../models/User');
 
-const ADMIN_EMAIL = process.env.DEFAULT_ADMIN_EMAIL || 'admin@candletsales.com';
-const ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@123456';
-const ADMIN_NAME = process.env.DEFAULT_ADMIN_NAME || 'Admin';
+const adminEmail = process.env.DEFAULT_ADMIN_EMAIL;
+const adminPassword = process.env.DEFAULT_ADMIN_PASSWORD;
+const adminName = process.env.DEFAULT_ADMIN_NAME || 'Admin';
 
 async function seedAdmin() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('✅ Đã kết nối MongoDB');
+    if (!process.env.MONGODB_URI) {
+      throw new Error('Thiếu biến môi trường MONGODB_URI');
+    }
 
-    // Kiểm tra đã tồn tại chưa
+    if (!adminEmail || !adminPassword || adminPassword.length < 12) {
+      throw new Error(
+        'DEFAULT_ADMIN_EMAIL và DEFAULT_ADMIN_PASSWORD (tối thiểu 12 ký tự) là bắt buộc'
+      );
+    }
+
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('Đã kết nối MongoDB');
+
     const existing = await User.findOne({ isDefaultAdmin: true });
     if (existing) {
-      console.log(`⚠️  Admin mặc định đã tồn tại: ${existing.email}`);
-      process.exit(0);
+      console.log(`Admin mặc định đã tồn tại: ${existing.email}`);
+      return;
     }
 
     const admin = await User.create({
-      name: ADMIN_NAME,
-      email: ADMIN_EMAIL,
-      password: ADMIN_PASSWORD,
+      name: adminName,
+      email: adminEmail,
+      password: adminPassword,
       role: 'admin',
       status: 'active',
       isDefaultAdmin: true,
     });
 
-    console.log('🎉 Tạo tài khoản admin mặc định thành công!');
-    console.log('─────────────────────────────────────');
-    console.log(`📧 Email    : ${admin.email}`);
-    console.log(`🔑 Password : ${ADMIN_PASSWORD}`);
-    console.log(`👤 Tên      : ${admin.name}`);
-    console.log('─────────────────────────────────────');
-    console.log('⚠️  Hãy đổi mật khẩu sau khi đăng nhập lần đầu!');
-
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Lỗi khi tạo admin:', error.message);
-    process.exit(1);
+    console.log(`Đã tạo admin mặc định: ${admin.email}`);
+    console.log('Mật khẩu được lấy từ biến môi trường và không được in ra terminal.');
+  } finally {
+    await mongoose.disconnect();
   }
 }
 
-seedAdmin();
+seedAdmin().catch((error) => {
+  console.error('Không thể tạo admin:', error.message);
+  process.exitCode = 1;
+});

@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: candletshop-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_URL
+        value: https://candlet.shop
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_URI
+        sync: false
+      - key: SEPAY_WEBHOOK_SECRET
+        sync: false
+      - key: SEPAY_ACCOUNT_NUMBER
+        sync: false
+      - key: MAIL_SMTP_USER
+        sync: false
+      - key: MAIL_SMTP_APP_PASSWORD
+        sync: false
+      - key: MAIL_NOTIFICATION_TO
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://api.candlet.shop/api/auth/google/callback
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: FACEBOOK_REDIRECT_URI
+        value: https://api.candlet.shop/api/auth/facebook/callback
+      - key: PANCAKE_WEBHOOK_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

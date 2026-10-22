@@ -28,8 +28,35 @@ const uploadRoutes = require('./routes/uploadRoutes');
 const sepayRoutes = require('./routes/sepayRoutes');
 const app = express();
 
+const configuredOrigins = String(process.env.CLIENT_URL || '')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+
+  const normalizedOrigin = origin.replace(/\/$/, '');
+  if (configuredOrigins.includes(normalizedOrigin)) return true;
+
+  return process.env.NODE_ENV !== 'production'
+    && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalizedOrigin);
+};
+
 // ── Middlewares ──────────────────────────────────────────────────
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin(origin, callback) {
+    if (isAllowedOrigin(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    const error = new Error('Origin is not allowed by CORS');
+    error.statusCode = 403;
+    callback(error);
+  },
+  credentials: true,
+}));
 // Must be registered before express.json(): SePay signs the unmodified body.
 app.use('/api/sepay', sepayRoutes);
 app.use(express.json({ limit: '10mb' }));
