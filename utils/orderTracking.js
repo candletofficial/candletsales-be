@@ -6,7 +6,7 @@ const shortTrackingCode = token => {
   const prefix = String(token || '').slice(0, SHORT_TOKEN_LENGTH);
   return /^[a-f0-9]{16}$/i.test(prefix) ? Buffer.from(prefix, 'hex').toString('base64url') : '';
 };
-const trackingPath = token => `/s/${shortTrackingCode(token)}`;
+const trackingPath = token => `/s/${shortTrackingCode(token)}?v=8`;
 
 function trackingTokenQuery(token) {
   const value = String(token || '').trim();

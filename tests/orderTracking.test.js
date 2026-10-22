@@ -198,7 +198,7 @@ test('short tracking paths keep the full token private and resolve by its indexe
   const token = newTrackingToken();
   const shortCode = shortTrackingCode(token);
   assert.match(shortCode, /^[A-Za-z0-9_-]{11}$/);
-  assert.equal(trackingPath(token), `/s/${shortCode}`);
+  assert.equal(trackingPath(token), `/s/${shortCode}?v=8`);
   assert.equal(trackingTokenQuery(token), token);
   assert.equal(String(trackingTokenQuery(token.slice(0, 16))), `/^${token.slice(0, 16)}/`);
   assert.equal(String(trackingTokenQuery(shortCode)), `/^${token.slice(0, 16)}/`);
