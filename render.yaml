@@ -22,6 +22,8 @@ services:
         sync: false
       - key: MAIL_SMTP_USER
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
       - key: MAIL_SMTP_HOST
         value: smtp-relay.brevo.com
       - key: MAIL_SMTP_PORT

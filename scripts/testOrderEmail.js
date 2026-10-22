@@ -15,7 +15,7 @@ const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
   });
 
   if (!sent) {
-    console.error('Gửi email kiểm tra thất bại. Kiểm tra biến MAIL_* trong .env và Gmail App Password.');
+    console.error('Gửi email kiểm tra thất bại. Kiểm tra BREVO_API_KEY hoặc các biến MAIL_* trong .env.');
     process.exitCode = 1;
     return;
   }
