@@ -11,7 +11,7 @@ inventory.triggerAutoConfirmImports = async () => {};
 mail.notifyNewWebsiteOrder = async () => {};
 const { createOrder, updateOrder, updateDeliveryStatus } = require('../controllers/orderController');
 const { createTrackingLink, getTrackingOrder } = require('../controllers/orderTrackingController');
-const { newTrackingToken, trackingTransitionError } = require('../utils/orderTracking');
+const { newTrackingToken, shortTrackingCode, trackingPath, trackingTokenQuery, trackingTransitionError } = require('../utils/orderTracking');
 const response = () => ({
   statusCode: 200, headers: {},
   status(code) { this.statusCode = code; return this; },
@@ -187,9 +187,36 @@ test('public tracking only returns customer-facing fields and reflects status ch
     assert.deepEqual(res.body.data.customer, {
       name: 'Test customer', phone: '0363491508', address: '124/29 Xóm Chiếu, Quận 4',
     });
+    assert.equal(res.body.data.payment_method, order.payment_method);
+    assert.equal(res.body.data.payment_status, order.payment_status);
     assert.equal(res.body.data.items[0].unit_cost, undefined);
     assert.equal(res.body.data.items[0].material_overrides, undefined);
   }
+});
+
+test('short tracking paths keep the full token private and resolve by its indexed prefix', () => {
+  const token = newTrackingToken();
+  const shortCode = shortTrackingCode(token);
+  assert.match(shortCode, /^[A-Za-z0-9_-]{11}$/);
+  assert.equal(trackingPath(token), `/d/${shortCode}`);
+  assert.equal(trackingTokenQuery(token), token);
+  assert.equal(String(trackingTokenQuery(token.slice(0, 16))), `/^${token.slice(0, 16)}/`);
+  assert.equal(String(trackingTokenQuery(shortCode)), `/^${token.slice(0, 16)}/`);
+  assert.equal(trackingTokenQuery('bad!token'), null);
+});
+
+test('public tracking accepts the shortened token prefix', async () => {
+  const order = makeOrder();
+  const shortToken = shortTrackingCode(order.tracking_token);
+  mock.method(Order, 'findOne', async query => {
+    assert.equal(String(query.tracking_token), `/^${order.tracking_token.slice(0, 16)}/`);
+    assert.equal(query.tracking_enabled, true);
+    return order;
+  });
+  const res = response();
+  await getTrackingOrder({ params: { token: shortToken } }, res, fail);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.orderId, order.orderId);
 });
 
 test('invalid and deleted tracking links return 404', async () => {

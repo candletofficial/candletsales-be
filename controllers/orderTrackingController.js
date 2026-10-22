@@ -1,6 +1,6 @@
 const Order = require('../models/Order');
 const FundTransaction = require('../models/FundTransaction');
-const { newTrackingToken, trackingPath, publicTrackingOrder } = require('../utils/orderTracking');
+const { newTrackingToken, trackingPath, trackingTokenQuery, publicTrackingOrder } = require('../utils/orderTracking');
 
 exports.createTrackingLink = async (req, res, next) => {
   let session;
@@ -47,8 +47,9 @@ exports.createTrackingLink = async (req, res, next) => {
 exports.getTrackingOrder = async (req, res, next) => {
   try {
     const { token } = req.params;
-    if (!/^[a-f0-9]{48}$/.test(token || '')) return res.status(404).json({ success: false, message: 'Link theo dõi không hợp lệ hoặc đơn hàng không còn tồn tại.' });
-    const order = await Order.findOne({ tracking_token: token, tracking_enabled: true });
+    const tokenQuery = trackingTokenQuery(token);
+    if (!tokenQuery) return res.status(404).json({ success: false, message: 'Link theo dõi không hợp lệ hoặc đơn hàng không còn tồn tại.' });
+    const order = await Order.findOne({ tracking_token: tokenQuery, tracking_enabled: true });
     if (!order) return res.status(404).json({ success: false, message: 'Link theo dõi không hợp lệ hoặc đơn hàng không còn tồn tại.' });
     res.set('Cache-Control', 'no-store');
     return res.json({ success: true, data: publicTrackingOrder(order) });

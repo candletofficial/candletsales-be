@@ -1,7 +1,27 @@
 const { randomBytes } = require('node:crypto');
 
 const newTrackingToken = () => randomBytes(24).toString('hex');
-const trackingPath = token => `/theo-doi-don/${token}`;
+const SHORT_TOKEN_LENGTH = 16;
+const shortTrackingCode = token => {
+  const prefix = String(token || '').slice(0, SHORT_TOKEN_LENGTH);
+  return /^[a-f0-9]{16}$/i.test(prefix) ? Buffer.from(prefix, 'hex').toString('base64url') : '';
+};
+const trackingPath = token => `/d/${shortTrackingCode(token)}`;
+
+function trackingTokenQuery(token) {
+  const value = String(token || '').trim();
+  if (/^[a-f0-9]{48}$/i.test(value)) return value.toLowerCase();
+  if (/^[a-f0-9]{16}$/i.test(value)) return new RegExp(`^${value.toLowerCase()}`);
+  if (/^[a-z0-9_-]{11}$/i.test(value)) {
+    try {
+      const prefix = Buffer.from(value, 'base64url').toString('hex');
+      if (/^[a-f0-9]{16}$/.test(prefix)) return new RegExp(`^${prefix}`);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
 function trackingTransitionError(order, next) {
   if (!order.tracking_enabled || !next || next === order.delivery_status) return null;
@@ -24,6 +44,8 @@ function publicTrackingOrder(order) {
     ordered_at: order.ordered_at,
     updated_at: order.updatedAt,
     total_price: order.total_price,
+    payment_method: order.payment_method,
+    payment_status: order.payment_status,
     shippingMethod: order.shippingMethod,
     customer: {
       name: order.customer_name || '',
@@ -37,4 +59,4 @@ function publicTrackingOrder(order) {
   };
 }
 
-module.exports = { newTrackingToken, trackingPath, trackingTransitionError, publicTrackingOrder };
+module.exports = { newTrackingToken, shortTrackingCode, trackingPath, trackingTokenQuery, trackingTransitionError, publicTrackingOrder };
