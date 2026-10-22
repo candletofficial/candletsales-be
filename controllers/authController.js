@@ -41,6 +41,22 @@ const getCustomerClientUrl = () => String(process.env.CLIENT_URL || 'http://loca
   .trim()
   .replace(/\/+$/, '');
 
+const getGoogleOAuthErrorMessage = (error) => {
+  const code = String(error?.oauthCode || '').toLowerCase();
+  const description = String(error?.oauthDescription || '').toLowerCase();
+
+  if (code === 'redirect_uri_mismatch' || description.includes('redirect_uri')) {
+    return 'URL callback Google chưa khớp với cấu hình của API. Vui lòng kiểm tra Authorized redirect URI.';
+  }
+  if (code === 'invalid_client') {
+    return 'Cấu hình Google Client ID hoặc Client Secret của API chưa chính xác.';
+  }
+  if (code === 'invalid_grant') {
+    return 'Phiên đăng nhập Google đã hết hạn hoặc URL callback không khớp. Vui lòng thử lại.';
+  }
+  return 'Không thể đăng nhập Google. Vui lòng thử lại.';
+};
+
 const redirectFacebookResult = (res, { token, error, returnTo = '/' }) => {
   const params = new URLSearchParams();
   if (token) params.set('token', token);
@@ -261,7 +277,13 @@ exports.googleCallback = async (req, res) => {
       }),
     });
     const tokenData = await tokenResponse.json();
-    if (!tokenResponse.ok || !tokenData.id_token) throw new Error('Google token exchange failed');
+    if (!tokenResponse.ok || !tokenData.id_token) {
+      const oauthError = new Error('Google token exchange failed');
+      oauthError.stage = 'token_exchange';
+      oauthError.oauthCode = tokenData?.error;
+      oauthError.oauthDescription = tokenData?.error_description;
+      throw oauthError;
+    }
 
     const client = new OAuth2Client(config.clientId);
     const ticket = await client.verifyIdToken({ idToken: tokenData.id_token, audience: config.clientId });
@@ -281,9 +303,13 @@ exports.googleCallback = async (req, res) => {
 
     return redirectGoogleResult(res, { token: signToken(user._id), returnTo });
   } catch (error) {
-    console.error('[google-login] OAuth failed:', error.message);
+    console.error('[google-login] OAuth failed:', {
+      stage: error.stage || 'callback',
+      code: error.oauthCode || error.code || error.name || 'unknown',
+      message: error.message,
+    });
     clearState();
-    return redirectGoogleResult(res, { error: 'Không thể đăng nhập Google. Vui lòng thử lại.', returnTo });
+    return redirectGoogleResult(res, { error: getGoogleOAuthErrorMessage(error), returnTo });
   }
 };
 

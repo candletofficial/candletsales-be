@@ -22,14 +22,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       unique: true,
       sparse: true,
-      default: null,
     },
     // ID ổn định do Google cấp, chỉ dùng cho đăng nhập khách hàng.
     google_id: {
       type: String,
       unique: true,
       sparse: true,
-      default: null,
     },
     password: {
       type: String,
