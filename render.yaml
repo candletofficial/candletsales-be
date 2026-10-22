@@ -2,7 +2,7 @@ services:
   - type: web
     name: candletshop-api
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/health
@@ -22,7 +22,15 @@ services:
         sync: false
       - key: MAIL_SMTP_USER
         sync: false
-      - key: MAIL_SMTP_APP_PASSWORD
+      - key: MAIL_SMTP_HOST
+        value: smtp-relay.brevo.com
+      - key: MAIL_SMTP_PORT
+        value: 2525
+      - key: MAIL_SMTP_SECURE
+        value: false
+      - key: MAIL_SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM_EMAIL
         sync: false
       - key: MAIL_NOTIFICATION_TO
         sync: false

@@ -497,7 +497,9 @@ exports.createOrder = async (req, res, next) => {
     triggerAutoConfirmImports().catch(console.error);
     // Chỉ đến đây mới có Order thật. Với chuyển khoản, đoạn này chỉ chạy sau
     // webhook SePay xác thực; email lỗi không làm thất bại đơn hàng.
-    notifyNewWebsiteOrder(order);
+    // Complete the SMTP attempt before returning so a free host cannot suspend
+    // the process while the notification is still in flight.
+    await notifyNewWebsiteOrder(order);
 
     return res.status(201).json({ success: true, data: order, message: 'Đã tạo đơn hàng thành công' });
   } catch (error) {

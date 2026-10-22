@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 
 let transporter;
+let transporterKey;
 let missingConfigLogged = false;
 
 const escapeHtml = (value) => String(value ?? '')
@@ -13,25 +14,35 @@ const escapeHtml = (value) => String(value ?? '')
 const formatMoney = (amount) => Number(amount || 0).toLocaleString('vi-VN') + 'đ';
 
 const getMailConfig = () => {
+  const host = String(process.env.MAIL_SMTP_HOST || 'smtp.gmail.com').trim();
+  const port = Number(process.env.MAIL_SMTP_PORT || 465);
+  const secureValue = String(process.env.MAIL_SMTP_SECURE || '').trim().toLowerCase();
+  const secure = secureValue ? secureValue === 'true' : port === 465;
   const user = String(process.env.MAIL_SMTP_USER || '').trim();
-  const pass = String(process.env.MAIL_SMTP_APP_PASSWORD || '').replace(/\s/g, '');
+  const pass = String(process.env.MAIL_SMTP_PASSWORD || process.env.MAIL_SMTP_APP_PASSWORD || '').replace(/\s/g, '');
+  const fromEmail = String(process.env.MAIL_FROM_EMAIL || user).trim();
   const recipients = String(process.env.MAIL_NOTIFICATION_TO || user)
     .split(',')
     .map((email) => email.trim())
     .filter(Boolean);
 
-  if (!user || !pass || recipients.length === 0) return null;
-  return { user, pass, recipients };
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535 || !user || !pass || !fromEmail || recipients.length === 0) return null;
+  return { host, port, secure, user, pass, fromEmail, recipients };
 };
 
 const getTransporter = (config) => {
-  if (!transporter) {
+  const key = [config.host, config.port, config.secure, config.user].join('|');
+  if (!transporter || transporterKey !== key) {
     transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
       auth: { user: config.user, pass: config.pass },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000,
     });
+    transporterKey = key;
   }
   return transporter;
 };
@@ -63,7 +74,7 @@ exports.notifyNewWebsiteOrder = async (order) => {
 
   try {
     await getTransporter(config).sendMail({
-      from: `"${shopName}" <${config.user}>`,
+      from: `"${shopName}" <${config.fromEmail}>`,
       to: config.recipients,
       subject: `[${shopName}] Đơn hàng mới #${order.orderId}`,
       text: [
