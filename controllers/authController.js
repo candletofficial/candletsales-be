@@ -36,7 +36,10 @@ const getCookie = (req, name) => {
     ?.slice(prefix.length);
 };
 
-const getCustomerClientUrl = () => String(process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/+$/, '');
+const getCustomerClientUrl = () => String(process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')[0]
+  .trim()
+  .replace(/\/+$/, '');
 
 const redirectFacebookResult = (res, { token, error, returnTo = '/' }) => {
   const params = new URLSearchParams();
