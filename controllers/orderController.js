@@ -9,7 +9,7 @@ const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
 const { freeshipDiscount } = require('../utils/freeshipDiscount');
 const { itemMaterials, materialId, preserveOrderMaterials } = require('../utils/orderItemMaterials');
-const { newTrackingToken, trackingPath, trackingTransitionError } = require('../utils/orderTracking');
+const { newTrackingToken, trackingTransitionError } = require('../utils/orderTracking');
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -358,7 +358,6 @@ exports.createOrder = async (req, res, next) => {
     }
 
     const isWebsite = (source === 'website');
-    const enableCustomerTracking = createTracking || isWebsite;
     const initialDeliveryStatus = createTracking ? 'pending' : req.body.delivery_status || (isWebsite ? 'pending' : 'delivered');
     const initialStatus = createTracking ? 'pending' : req.body.status || (isWebsite ? 'pending' : 'completed');
     const isWebsiteTransfer = isWebsite && payment_method === 'transfer';
@@ -374,8 +373,8 @@ exports.createOrder = async (req, res, next) => {
     // 2. Tạo đơn hàng
     const order = await Order.create({
       orderId,
-      tracking_enabled: enableCustomerTracking,
-      tracking_token: enableCustomerTracking ? newTrackingToken() : undefined,
+      tracking_enabled: createTracking,
+      tracking_token: createTracking ? newTrackingToken() : undefined,
       items: items || [],
       total_price: total_price || 0,
       logistics_cost: logistics_cost || 0,
@@ -1372,28 +1371,8 @@ exports.getShopOrders = async (req, res, next) => {
       return res.status(200).json({ success: true, data: [] });
     }
 
-    const orders = await Order.find(query)
-      .select('+tracking_token -items.material_overrides -items.materials_key -pancake_details')
-      .sort({ ordered_at: -1 });
-
-    const customerOrders = await Promise.all(orders.map(async (order) => {
-      // Older website orders predate automatic public tracking. Create their
-      // opaque token lazily when the customer looks them up.
-      if (order.source === 'website' && !order.tracking_token) {
-        order.tracking_token = newTrackingToken();
-        order.tracking_enabled = true;
-        await order.save();
-      }
-
-      const publicOrder = order.toObject();
-      publicOrder.tracking_path = order.tracking_enabled && order.tracking_token
-        ? trackingPath(order.tracking_token)
-        : null;
-      delete publicOrder.tracking_token;
-      return publicOrder;
-    }));
-
-    res.status(200).json({ success: true, data: customerOrders });
+    const orders = await Order.find(query).select('-items.material_overrides -items.materials_key -pancake_details').sort({ ordered_at: -1 });
+    res.status(200).json({ success: true, data: orders });
   } catch (error) {
     next(error);
   }
