@@ -9,7 +9,7 @@ const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
 const { freeshipDiscount } = require('../utils/freeshipDiscount');
 const { itemMaterials, materialId, preserveOrderMaterials } = require('../utils/orderItemMaterials');
-const { newTrackingToken, trackingTransitionError } = require('../utils/orderTracking');
+const { newTrackingToken, trackingPath, trackingTransitionError } = require('../utils/orderTracking');
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -1371,8 +1371,20 @@ exports.getShopOrders = async (req, res, next) => {
       return res.status(200).json({ success: true, data: [] });
     }
 
-    const orders = await Order.find(query).select('-items.material_overrides -items.materials_key -pancake_details').sort({ ordered_at: -1 });
-    res.status(200).json({ success: true, data: orders });
+    const orders = await Order.find(query)
+      .select('+tracking_token -items.material_overrides -items.materials_key -pancake_details')
+      .sort({ ordered_at: -1 });
+
+    const customerOrders = orders.map((order) => {
+      const publicOrder = order.toObject();
+      publicOrder.tracking_path = order.source !== 'website' && order.tracking_enabled && order.tracking_token
+        ? trackingPath(order.tracking_token)
+        : null;
+      delete publicOrder.tracking_token;
+      return publicOrder;
+    });
+
+    res.status(200).json({ success: true, data: customerOrders });
   } catch (error) {
     next(error);
   }
