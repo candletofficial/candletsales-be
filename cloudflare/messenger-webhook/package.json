@@ -1,0 +1,9 @@
+{
+  "name": "candlet-messenger-webhook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "npx --yes wrangler@latest deploy --secrets-file .dev.vars"
+  }
+}

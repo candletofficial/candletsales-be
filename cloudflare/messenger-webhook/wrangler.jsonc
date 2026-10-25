@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "candlet-messenger-webhook",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-25",
+  "secrets": {
+    "required": [
+      "META_VERIFY_TOKEN",
+      "META_APP_SECRET",
+      "META_QUEUE_SECRET",
+      "RENDER_WEBHOOK_URL"
+    ]
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "MESSENGER_EVENTS",
+        "queue": "candlet-messenger-events"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "candlet-messenger-events",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "retry_delay": 60,
+        "dead_letter_queue": "candlet-messenger-events-dlq"
+      }
+    ]
+  }
+}

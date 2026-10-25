@@ -5,6 +5,7 @@ const messengerEventSchema = new mongoose.Schema({
   page_id: String,
   psid: String,
   status: { type: String, enum: ['processing', 'processed', 'failed', 'ignored'], default: 'processing' },
+  attempts: { type: Number, default: 1 },
   error: { type: String, default: '' },
   processed_at: Date,
 }, { timestamps: true });

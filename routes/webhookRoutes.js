@@ -34,6 +34,12 @@ const verifyPancakeWebhook = (req, res, next) => {
 router.post('/pancake', verifyPancakeWebhook, handlePancakeWebhook);
 router.get('/meta', metaMessengerController.verifyWebhook);
 router.post('/meta', metaMessengerController.verifySignature, metaMessengerController.receiveWebhook);
+router.post(
+  '/meta/queued',
+  metaMessengerController.verifyQueueSecret,
+  metaMessengerController.verifySignature,
+  metaMessengerController.receiveQueuedWebhook,
+);
 
 // Inspection endpoints expose customer payloads and are therefore admin-only.
 router.post('/pancake-inspect', protect, adminOnly, inspectPancakeWebhook);

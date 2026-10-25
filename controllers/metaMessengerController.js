@@ -13,6 +13,8 @@ const safeEqual = (left, right) => {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
+const PROCESSING_LEASE_MS = 2 * 60 * 1000;
+
 exports.verifyWebhook = (req, res) => {
   if (!process.env.META_VERIFY_TOKEN) return res.sendStatus(503);
   const mode = req.query['hub.mode'];
@@ -33,6 +35,14 @@ exports.verifySignature = (req, res, next) => {
   const expected = `sha256=${crypto.createHmac('sha256', appSecret).update(req.rawBody).digest('hex')}`;
   if (!safeEqual(signature, expected)) return res.sendStatus(401);
   next();
+};
+
+exports.verifyQueueSecret = (req, res, next) => {
+  const configured = process.env.META_QUEUE_SECRET;
+  const supplied = req.get('x-candlet-queue-secret');
+  if (!configured) return res.status(503).json({ success: false, message: 'Messenger queue secret is not configured' });
+  if (!supplied || !safeEqual(supplied, configured)) return res.sendStatus(401);
+  return next();
 };
 
 const sendText = async (psid, text) => {
@@ -132,18 +142,43 @@ const createDraft = async (conversation) => {
   );
 };
 
-const processMessage = async (pageId, event) => {
+const claimEvent = async ({ eventId, pageId, psid }) => {
+  try {
+    return await MessengerEvent.create({ event_id: eventId, page_id: pageId, psid });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+  }
+
+  const staleBefore = new Date(Date.now() - PROCESSING_LEASE_MS);
+  return MessengerEvent.findOneAndUpdate(
+    {
+      event_id: eventId,
+      $or: [
+        { status: 'failed' },
+        { status: 'processing', updatedAt: { $lte: staleBefore } },
+      ],
+    },
+    {
+      $set: { status: 'processing', error: '', processed_at: null, page_id: pageId, psid },
+      $inc: { attempts: 1 },
+    },
+    { new: true },
+  );
+};
+
+const processMessage = async (pageId, event, { retryFailures = false } = {}) => {
   const psid = event.sender?.id;
   const text = event.message?.text?.trim() || event.postback?.title?.trim();
   const eventId = event.message?.mid || event.postback?.mid || `${pageId}:${psid}:${event.timestamp}`;
   if (!psid || !text || event.message?.is_echo) return;
 
-  let eventRecord;
-  try {
-    eventRecord = await MessengerEvent.create({ event_id: eventId, page_id: pageId, psid });
-  } catch (error) {
-    if (error.code === 11000) return;
-    throw error;
+  const eventRecord = await claimEvent({ eventId, pageId, psid });
+  if (!eventRecord) {
+    if (retryFailures) {
+      const existing = await MessengerEvent.findOne({ event_id: eventId }).select('status').lean();
+      if (existing?.status === 'processing') throw new Error(`Messenger event ${eventId} is still processing`);
+    }
+    return;
   }
 
   try {
@@ -217,14 +252,15 @@ const processMessage = async (pageId, event) => {
     eventRecord.processed_at = new Date();
     await eventRecord.save().catch(() => {});
     console.error('[meta-bot] Message processing failed:', error.message || error);
+    if (retryFailures) throw error;
     await sendText(psid, 'Candlet đang chuyển tin nhắn của bạn cho nhân viên hỗ trợ. Bạn vui lòng chờ một chút nhé.').catch(() => {});
   }
 };
 
-const processWebhook = async (body) => {
+const processWebhook = async (body, options = {}) => {
   if (body.object !== 'page') return;
   for (const entry of body.entry || []) {
-    for (const event of entry.messaging || []) await processMessage(entry.id, event);
+    for (const event of entry.messaging || []) await processMessage(entry.id, event, options);
   }
 };
 
@@ -233,4 +269,14 @@ exports.receiveWebhook = (req, res) => {
   setImmediate(() => processWebhook(req.body).catch((error) => console.error('[meta-bot] Webhook failed:', error.message || error)));
 };
 
-module.exports._private = { resolveCart, validLead, processWebhook };
+exports.receiveQueuedWebhook = async (req, res) => {
+  try {
+    await processWebhook(req.body, { retryFailures: true });
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error('[meta-bot] Queued webhook failed:', error.message || error);
+    return res.status(503).json({ success: false, message: 'Messenger event processing failed' });
+  }
+};
+
+module.exports._private = { resolveCart, validLead, processWebhook, claimEvent };

@@ -1,10 +1,18 @@
 # Candlet Messenger AI bot
 
-The bot receives Facebook Page messages directly from Meta, uses the OpenAI Responses API for product consultation, and creates an order draft only after the customer confirms a complete order.
+Bot nhận tin nhắn Facebook Page, tư vấn bằng OpenAI và chỉ tạo đơn nháp sau khi khách đã xác nhận đủ thông tin. Luồng production dùng Cloudflare Worker và Queue để việc nhận webhook không phụ thuộc vào trạng thái ngủ của Render.
 
-## Required environment variables
+```text
+Meta Messenger
+    -> Cloudflare Worker (xác thực chữ ký, trả 200 nhanh)
+    -> Cloudflare Queue (lưu, retry, DLQ)
+    -> Render /api/webhooks/meta/queued
+    -> MongoDB + OpenAI + Meta Send API
+```
 
-Configure these values locally in `.env` and again in the Render service environment. Never add real secrets to Git.
+## Biến môi trường trên Render
+
+Thêm các giá trị sau vào **Render > candletshop-api > Environment**. Không đưa giá trị thật lên Git.
 
 ```env
 OPENAI_API_KEY=
@@ -13,39 +21,79 @@ META_PAGE_ACCESS_TOKEN=
 META_VERIFY_TOKEN=
 META_APP_SECRET=
 META_GRAPH_VERSION=v24.0
+META_QUEUE_SECRET=
 ```
 
-`META_VERIFY_TOKEN` is a private random value that you choose. It is entered in both Render and the Meta webhook setup screen.
+- `META_VERIFY_TOKEN`: chuỗi ngẫu nhiên dùng chung giữa Meta và Worker.
+- `META_QUEUE_SECRET`: chuỗi ngẫu nhiên khác, dùng chung giữa Worker và Render.
+- Có thể tạo từng chuỗi bằng lệnh:
 
-## Meta setup
+  `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
 
-1. Open Meta for Developers and create or select a Business app.
-2. Add the Messenger product and connect the Candlet Facebook Page.
-3. Generate a Page Access Token for that Page.
-4. Set the webhook callback to:
+Sau khi thêm biến, deploy backend trước. Endpoint dành cho Queue là:
 
-   `https://<render-backend-domain>/api/webhooks/meta`
+`https://api.candlet.shop/api/webhooks/meta/queued`
 
-5. Enter the same `META_VERIFY_TOKEN` used by the backend.
-6. Subscribe the Page to message and postback events.
-7. Add the app secret and Page token to Render, then redeploy.
-8. Complete the Meta permissions/app review required before serving customers who are not app testers.
+## Triển khai Cloudflare Worker và Queue
 
-## Admin workflow
+Mở terminal tại `candletsales-be/cloudflare/messenger-webhook`, sau đó chạy:
 
-Open `/admin/messenger-bot` to:
+```powershell
+npx --yes wrangler@latest login
+npx --yes wrangler@latest queues create candlet-messenger-events
+npx --yes wrangler@latest queues create candlet-messenger-events-dlq
+Copy-Item .dev.vars.example .dev.vars
+```
 
-- see whether OpenAI and Meta credentials are configured;
-- review conversations handed to a person;
-- pause or resume bot replies per conversation;
-- approve or reject Messenger order drafts.
+Mở `.dev.vars`, điền bốn giá trị sau rồi lưu:
 
-Approving a draft creates a tracked Facebook order, validates materials through the existing order workflow, deducts inventory, and sends the customer their order number and public tracking link.
+```env
+META_VERIFY_TOKEN=<giống Render>
+META_APP_SECRET=<giống Render>
+META_QUEUE_SECRET=<giống Render>
+RENDER_WEBHOOK_URL=https://api.candlet.shop/api/webhooks/meta/queued
+```
 
-## Operating rules
+Triển khai Worker cùng các secret:
 
-- The bot never creates a real order before explicit customer confirmation and admin approval.
-- Complaints, refunds, transfer receipts, medical questions, and requests for a person are handed off.
-- Duplicate Meta message IDs are ignored for 30 days.
-- OpenAI receives the current product catalog and recent conversation context. API requests use `store: false`.
-- A free Render instance can cold-start. Watch Meta webhook delivery logs during rollout and use an always-on receiver before relying on the bot for paid ad traffic.
+```powershell
+npm run deploy
+```
+
+File `.dev.vars` đã được Git bỏ qua. Không commit hoặc gửi file này cho người khác. Worker không cần `OPENAI_API_KEY` hoặc `META_PAGE_ACCESS_TOKEN`.
+
+## Cấu hình Meta
+
+1. Mở Meta for Developers và chọn Business app.
+2. Thêm Messenger, kết nối Facebook Page Candlet và tạo Page Access Token.
+3. Trong cấu hình Webhooks, đặt callback URL thành URL `workers.dev` do lệnh deploy trả về, ví dụ:
+
+   `https://candlet-messenger-webhook.<account>.workers.dev`
+
+4. Nhập `META_VERIFY_TOKEN` giống Worker và Render.
+5. Subscribe Page vào tối thiểu sự kiện `messages` và `messaging_postbacks`.
+6. Hoàn tất quyền và App Review của Meta trước khi phục vụ tài khoản không thuộc nhóm tester.
+
+Không đặt callback Meta trực tiếp về Render khi dùng Queue. Route `/api/webhooks/meta` được giữ làm phương án chạy local hoặc khôi phục tạm thời.
+
+## Thao tác trong trang quản trị
+
+Mở `/admin/messenger-bot` để xem hội thoại cần người xử lý, tạm dừng hoặc tiếp tục bot theo từng khách, và duyệt hoặc từ chối đơn nháp. Khi duyệt, hệ thống tạo đơn Facebook có mã theo dõi, kiểm tra và trừ nguyên liệu, rồi gửi mã đơn cùng liên kết theo dõi cho khách.
+
+## Kiểm tra
+
+1. Trong thư mục Worker, chạy `npm test`.
+2. Nhắn thử vào Page sau khi Render đã ngủ hơn 15 phút.
+3. Kiểm tra **Cloudflare > Workers & Pages > candlet-messenger-webhook > Logs**.
+4. Kiểm tra **Queues > candlet-messenger-events**: backlog phải trở về 0 sau khi Render thức dậy.
+5. Kiểm tra Render logs và trang `/admin/messenger-bot`.
+6. Nếu một sự kiện thất bại 10 lần, kiểm tra queue `candlet-messenger-events-dlq`.
+
+Queue ngăn tin nhắn bị mất trong thời gian Render cold-start và tự thử lại sau 60 giây. Gói Cloudflare Free lưu message tối đa 24 giờ, vì vậy vẫn cần theo dõi DLQ và cảnh báo vận hành.
+
+## Quy tắc vận hành
+
+- Bot không tạo đơn thật trước khi khách xác nhận và admin duyệt.
+- Khiếu nại, hoàn tiền, biên lai chuyển khoản, nội dung sức khỏe và yêu cầu gặp người thật được chuyển cho nhân viên.
+- Meta message ID đã xử lý được bỏ qua trong 30 ngày; sự kiện lỗi hoặc bị kẹt quá thời gian lease có thể được Queue thử lại.
+- OpenAI nhận danh mục sản phẩm và phần hội thoại gần nhất; request dùng `store: false`.

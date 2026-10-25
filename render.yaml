@@ -58,3 +58,17 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_SALES_MODEL
+        value: gpt-5.4-mini
+      - key: META_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: META_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_GRAPH_VERSION
+        value: v24.0
+      - key: META_QUEUE_SECRET
+        sync: false

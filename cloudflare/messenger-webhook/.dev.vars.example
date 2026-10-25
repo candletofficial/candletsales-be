@@ -1,0 +1,4 @@
+META_VERIFY_TOKEN=
+META_APP_SECRET=
+META_QUEUE_SECRET=
+RENDER_WEBHOOK_URL=https://api.candlet.shop/api/webhooks/meta/queued

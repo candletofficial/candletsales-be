@@ -61,6 +61,24 @@ test('Meta webhook validates the SHA-256 request signature', () => {
   }
 });
 
+test('queued Meta webhook requires the private queue secret', () => {
+  const previous = process.env.META_QUEUE_SECRET;
+  process.env.META_QUEUE_SECRET = 'queue-secret';
+  try {
+    let called = false;
+    const valid = response();
+    controller.verifyQueueSecret({ get: () => 'queue-secret' }, valid, () => { called = true; });
+    assert.equal(called, true);
+
+    const invalid = response();
+    controller.verifyQueueSecret({ get: () => 'wrong' }, invalid, () => {});
+    assert.equal(invalid.statusCode, 401);
+  } finally {
+    if (previous === undefined) delete process.env.META_QUEUE_SECRET;
+    else process.env.META_QUEUE_SECRET = previous;
+  }
+});
+
 test('OpenAI sales bot uses a strict schema and does not expose the API key in input', async () => {
   const previousKey = process.env.OPENAI_API_KEY;
   const previousModel = process.env.OPENAI_SALES_MODEL;
