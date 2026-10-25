@@ -3,8 +3,13 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const mock = require('node:test').mock;
 const Product = require('../models/Product');
+const MessengerBotKnowledge = require('../models/MessengerBotKnowledge');
+const MessengerProductProfile = require('../models/MessengerProductProfile');
+const MessengerBotMedia = require('../models/MessengerBotMedia');
+const MessengerConversation = require('../models/MessengerConversation');
 const controller = require('../controllers/metaMessengerController');
-const { generateSalesReply } = require('../utils/openaiSalesBot');
+const adminController = require('../controllers/messengerBotAdminController');
+const { generateSalesReply, _private: salesBotPrivate } = require('../utils/openaiSalesBot');
 
 const response = () => ({
   statusCode: 200,
@@ -87,14 +92,22 @@ test('OpenAI sales bot uses a strict schema and does not expose the API key in i
 
   mock.method(Product, 'find', () => ({
     select: () => ({
-      limit: () => ({
-        lean: async () => [{
-          _id: '507f1f77bcf86cd799439011', productId: 'SP-1', name: 'Soft Healing',
-          description: 'Mùi hương thư giãn', base_price: 149000, skus: [], variant_groups: [],
-        }],
+      populate: () => ({
+        populate: () => ({
+          limit: () => ({
+            lean: async () => [{
+              _id: '507f1f77bcf86cd799439011', productId: 'SP-1', name: 'Soft Healing',
+              image: 'https://images.example.com/soft-healing.jpg', description: 'Mùi hương thư giãn',
+              base_price: 149000, base_ingredients: [], skus: [], variant_groups: [],
+            }],
+          }),
+        }),
       }),
     }),
   }));
+  mock.method(MessengerProductProfile, 'find', () => ({ lean: async () => [] }));
+  mock.method(MessengerBotKnowledge, 'findOne', () => ({ lean: async () => null }));
+  mock.method(MessengerBotMedia, 'find', () => ({ sort: () => ({ limit: () => ({ lean: async () => [] }) }) }));
 
   let requestBody;
   mock.method(global, 'fetch', async (url, options) => {
@@ -107,7 +120,7 @@ test('OpenAI sales bot uses a strict schema and does not expose the API key in i
         return { output: [{ content: [{ type: 'output_text', text: JSON.stringify({
           reply: 'Bạn thích nhóm hương nào ạ?', intent: 'consult', handoff: false,
           handoff_reason: null, customer: { name: null, phone: null, address: null },
-          cart: [], ready_for_draft: false,
+          cart: [], recommended_product_ids: ['507f1f77bcf86cd799439011'], recommended_media_ids: [], ready_for_draft: false,
         }) }] }] };
       },
     };
@@ -121,12 +134,148 @@ test('OpenAI sales bot uses a strict schema and does not expose the API key in i
     assert.equal(requestBody.text.format.type, 'json_schema');
     assert.equal(requestBody.text.format.strict, true);
     assert.equal(optionsContainSecret(requestBody, 'test-secret-key'), false);
+    assert.equal(result.recommended_products[0].name, 'Soft Healing');
   } finally {
     mock.restoreAll();
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
     if (previousModel === undefined) delete process.env.OPENAI_SALES_MODEL;
     else process.env.OPENAI_SALES_MODEL = previousModel;
+  }
+});
+
+test('order confirmation requires an explicit positive message', () => {
+  const { isExplicitConfirmation, confirmationSummary } = controller._private;
+  assert.equal(isExplicitConfirmation('Xác nhận ạ'), true);
+  assert.equal(isExplicitConfirmation('Oke chốt đơn giúp mình'), true);
+  assert.equal(isExplicitConfirmation('Chưa, sửa lại địa chỉ giúp mình'), false);
+  assert.equal(isExplicitConfirmation('Không đúng rồi'), false);
+
+  const summary = confirmationSummary({
+    customer: { name: 'An', phone: '0901234567', address: 'Hà Nội' },
+    cart: [{ product_name: 'Nến hũ', sku_label: 'Soft Healing - 100 ml', customer_label: 'Soft Healing', quantity: 2, unit_price: 149000 }],
+  });
+  assert.match(summary, /Soft Healing/);
+  assert.doesNotMatch(summary, /Nến hũ/);
+  assert.match(summary, /298\.000/);
+  assert.match(summary, /Xác nhận/);
+});
+
+test('cart keeps full SKU data but uses only the scent classification for customers', async () => {
+  mock.method(Product, 'find', () => ({
+    lean: async () => [{
+      _id: '507f1f77bcf86cd799439011', productId: 'SP-1', name: 'Nến hũ', image: 'https://images.example.com/candle.jpg', base_price: 149000,
+      variant_groups: [
+        { name: 'Mùi hương', options: [{ id: 'scent-soft', label: 'Soft Healing' }] },
+        { name: 'Kích thước', options: [{ id: 'size-large', label: 'Hũ lớn' }] },
+      ],
+      skus: [{ id: 'sku-1', price: 169000, combination: ['scent-soft', 'size-large'] }],
+    }],
+  }));
+  try {
+    const [item] = await controller._private.resolveCart([{
+      product_id: '507f1f77bcf86cd799439011', sku_id: 'sku-1', quantity: 1,
+    }]);
+    assert.equal(item.sku_label, 'Soft Healing - Hũ lớn');
+    assert.equal(item.customer_label, 'Soft Healing');
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('catalog retrieval prioritizes matching trained products and keeps cart products', () => {
+  const products = [
+    { _id: 'a', name: 'Soft Healing', description: 'thư giãn nhẹ nhàng' },
+    { _id: 'b', name: 'Night Muse', description: 'hương gỗ đậm' },
+    { _id: 'c', name: 'Hidden', description: 'hương gỗ' },
+  ];
+  const profiles = [
+    { product: 'a', enabled: true, moods: ['thư giãn'] },
+    { product: 'b', enabled: true, scent_notes: ['gỗ'] },
+    { product: 'c', enabled: false, scent_notes: ['gỗ'] },
+  ];
+  const result = salesBotPrivate.selectRelevantProducts(products, profiles, 'Mình cần mùi thư giãn', {
+    cart: [{ product_id: 'b' }],
+  });
+  assert.deepEqual(result.map((item) => item.product._id), ['b', 'a']);
+});
+
+test('Messenger product cards contain safe image and product links', () => {
+  const previous = process.env.CLIENT_URL;
+  process.env.CLIENT_URL = 'https://candlet.shop';
+  try {
+    const message = controller._private.buildProductCardsMessage([
+      { _id: 'abc123', name: 'Soft Healing', image: 'https://images.example.com/soft.jpg', base_price: 149000, scent_group: 'Hoa cỏ' },
+      { _id: 'ignored', name: 'Ảnh không an toàn', image: 'http://images.example.com/plain.jpg', base_price: 1 },
+    ]);
+    const [card] = message.attachment.payload.elements;
+    assert.equal(message.attachment.payload.template_type, 'generic');
+    assert.equal(message.attachment.payload.elements.length, 1);
+    assert.equal(card.image_url, 'https://images.example.com/soft.jpg');
+    assert.equal(card.default_action.url, 'https://candlet.shop/product/abc123');
+    assert.equal(card.buttons[0].title, 'Xem sản phẩm');
+  } finally {
+    if (previous === undefined) delete process.env.CLIENT_URL;
+    else process.env.CLIENT_URL = previous;
+  }
+});
+
+test('Messenger media images only accept public HTTPS URLs', () => {
+  const { buildMediaImageMessage } = controller._private;
+  assert.deepEqual(buildMediaImageMessage({ image_url: 'https://images.example.com/gift.jpg' }), {
+    attachment: { type: 'image', payload: { url: 'https://images.example.com/gift.jpg', is_reusable: true } },
+  });
+  assert.equal(buildMediaImageMessage({ image_url: 'http://images.example.com/gift.jpg' }), null);
+  assert.equal(buildMediaImageMessage({ image_url: 'not-a-url' }), null);
+});
+
+test('admin can reply manually and the conversation switches to human mode', async () => {
+  const previousToken = process.env.META_PAGE_ACCESS_TOKEN;
+  process.env.META_PAGE_ACCESS_TOKEN = 'page-token';
+  const conversation = {
+    psid: 'customer-1', mode: 'bot', history: [],
+    async save() { this.saved = true; },
+  };
+  mock.method(MessengerConversation, 'findById', async () => conversation);
+  let sentBody;
+  mock.method(global, 'fetch', async (_url, options) => {
+    sentBody = JSON.parse(options.body);
+    return { ok: true, async json() { return { recipient_id: 'customer-1' }; } };
+  });
+  try {
+    const res = response();
+    let forwarded;
+    await adminController.sendConversationMessage({ params: { id: 'conversation-1' }, body: { text: 'Candlet hỗ trợ bạn ngay đây ạ.' } }, res, (error) => { forwarded = error; });
+    assert.equal(forwarded, undefined);
+    assert.equal(res.statusCode, 200);
+    assert.equal(sentBody.message.text, 'Candlet hỗ trợ bạn ngay đây ạ.');
+    assert.equal(conversation.mode, 'human');
+    assert.equal(conversation.history.at(-1).role, 'assistant');
+    assert.equal(conversation.saved, true);
+  } finally {
+    mock.restoreAll();
+    if (previousToken === undefined) delete process.env.META_PAGE_ACCESS_TOKEN;
+    else process.env.META_PAGE_ACCESS_TOKEN = previousToken;
+  }
+});
+
+test('starting a new consultation resets state while preserving history', async () => {
+  let update;
+  mock.method(MessengerConversation, 'findByIdAndUpdate', async (_id, value) => {
+    update = value;
+    return { _id: 'conversation-1', history: [{ role: 'user', text: 'Nội dung cũ' }] };
+  });
+  try {
+    const res = response();
+    await adminController.resetConversation({ params: { id: 'conversation-1' } }, res, assert.fail);
+    assert.equal(res.statusCode, 200);
+    assert.equal(update.$set.mode, 'bot');
+    assert.equal(update.$set.stage, 'consulting');
+    assert.deepEqual(update.$set.cart, []);
+    assert.ok(update.$set.context_started_at instanceof Date);
+    assert.equal(Object.hasOwn(update.$set, 'history'), false);
+  } finally {
+    mock.restoreAll();
   }
 });
 

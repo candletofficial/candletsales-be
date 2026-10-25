@@ -1,11 +1,14 @@
 const Product = require('../models/Product');
 const Review = require('../models/Review');
 const Coupon = require('../models/Coupon');
+const { enrichProductAvailability } = require('../utils/productAvailability');
 
 // Lấy danh sách sản phẩm hiển thị trên trang chủ cửa hàng
 exports.getShopProducts = async (req, res, next) => {
   try {
-    const products = await Product.find({}, '-base_ingredients -skus.extra_ingredients')
+    const products = await Product.find()
+      .populate('base_ingredients.ingredient_id')
+      .populate('skus.extra_ingredients.ingredient_id')
       .sort({ createdAt: -1 });
 
     const reviewStats = await Review.aggregate([
@@ -24,7 +27,9 @@ exports.getShopProducts = async (req, res, next) => {
     });
 
     const result = products.map((p) => {
-      const obj = p.toObject();
+      const obj = enrichProductAvailability(p);
+      delete obj.base_ingredients;
+      for (const sku of obj.skus || []) delete sku.extra_ingredients;
       const stats = statsMap[obj._id.toString()];
       obj.avgRating = stats && stats.avgRating ? stats.avgRating.toFixed(1) : "5.0";
       obj.reviewCount = stats ? stats.reviewCount : 0;
@@ -40,8 +45,9 @@ exports.getShopProducts = async (req, res, next) => {
 // Lấy chi tiết sản phẩm
 exports.getShopProductById = async (req, res, next) => {
   try {
-    const product = await Product.findById(req.params.id, '-skus.extra_ingredients')
-      .populate('base_ingredients.ingredient_id', 'name category unit supplier');
+    const product = await Product.findById(req.params.id)
+      .populate('base_ingredients.ingredient_id')
+      .populate('skus.extra_ingredients.ingredient_id');
     if (!product) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
     }
@@ -58,7 +64,15 @@ exports.getShopProductById = async (req, res, next) => {
       }
     ]);
 
-    const obj = product.toObject();
+    const obj = enrichProductAvailability(product);
+    obj.base_ingredients = (obj.base_ingredients || []).map((item) => ({
+      quantity: item.quantity,
+      ingredient_id: item.ingredient_id ? {
+        _id: item.ingredient_id._id, name: item.ingredient_id.name, category: item.ingredient_id.category,
+        unit: item.ingredient_id.unit, supplier: item.ingredient_id.supplier,
+      } : null,
+    }));
+    for (const sku of obj.skus || []) delete sku.extra_ingredients;
     if (reviewStats.length > 0) {
       obj.avgRating = reviewStats[0].avgRating.toFixed(1);
       obj.reviewCount = reviewStats[0].reviewCount;

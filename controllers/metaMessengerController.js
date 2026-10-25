@@ -45,7 +45,7 @@ exports.verifyQueueSecret = (req, res, next) => {
   return next();
 };
 
-const sendText = async (psid, text) => {
+const sendMessage = async (psid, message) => {
   const token = process.env.META_PAGE_ACCESS_TOKEN;
   if (!token) throw new Error('META_PAGE_ACCESS_TOKEN is not configured');
   const version = process.env.META_GRAPH_VERSION || 'v24.0';
@@ -55,12 +55,56 @@ const sendText = async (psid, text) => {
     body: JSON.stringify({
       messaging_type: 'RESPONSE',
       recipient: { id: psid },
-      message: { text: String(text).slice(0, 1900) },
+      message,
     }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || `Meta Send API failed (${response.status})`);
   return payload;
+};
+
+const sendText = (psid, text) => sendMessage(psid, { text: String(text).slice(0, 1900) });
+
+const buildProductCardsMessage = (products) => {
+  const siteUrl = String(process.env.CLIENT_URL || 'https://candlet.shop').split(',')[0].replace(/\/$/, '');
+  const elements = (products || []).filter((product) => {
+    try { return new URL(product.image).protocol === 'https:'; } catch { return false; }
+  }).slice(0, 3).map((product) => ({
+    title: String(product.name || 'Sản phẩm Candlet').slice(0, 80),
+    image_url: product.image,
+    subtitle: `${Number(product.base_price || 0).toLocaleString('vi-VN')}đ${product.scent_group ? ` · ${product.scent_group}` : ''}`.slice(0, 80),
+    default_action: {
+      type: 'web_url', url: `${siteUrl}/product/${product._id}`, webview_height_ratio: 'full',
+    },
+    buttons: [{ type: 'web_url', url: `${siteUrl}/product/${product._id}`, title: 'Xem sản phẩm' }],
+  }));
+  if (!elements.length) return null;
+  return { attachment: { type: 'template', payload: { template_type: 'generic', elements } } };
+};
+
+const sendProductCards = async (psid, products) => {
+  const message = buildProductCardsMessage(products);
+  if (!message) return [];
+  await sendMessage(psid, message);
+  return message.attachment.payload.elements.map((element) => element.default_action.url.split('/').pop());
+};
+
+const buildMediaImageMessage = (item) => {
+  try {
+    if (new URL(item?.image_url).protocol !== 'https:') return null;
+  } catch { return null; }
+  return { attachment: { type: 'image', payload: { url: item.image_url, is_reusable: true } } };
+};
+
+const sendMediaImages = async (psid, items) => {
+  const sentIds = [];
+  for (const item of (items || []).slice(0, 3)) {
+    const message = buildMediaImageMessage(item);
+    if (!message) continue;
+    await sendMessage(psid, message);
+    sentIds.push(String(item._id));
+  }
+  return sentIds;
 };
 
 exports.sendMetaText = sendText;
@@ -95,6 +139,15 @@ const resolveCart = async (requestedCart) => {
       }
       return optionId;
     });
+    let customerLabel = '';
+    for (const optionId of sku?.combination || []) {
+      for (const group of product.variant_groups || []) {
+        const option = (group.options || []).find((item) => item.id === optionId);
+        if (!option) continue;
+        if (/\b(mui|huong)\b/.test(normalizedMessage(group.name))) customerLabel = option.label;
+        break;
+      }
+    }
     result.push({
       product_id: product._id,
       productId: product.productId,
@@ -102,6 +155,7 @@ const resolveCart = async (requestedCart) => {
       product_image: product.image,
       sku_id: sku?.id || null,
       sku_label: labels.join(' - '),
+      customer_label: customerLabel || labels.join(' - '),
       unit_price: sku?.price > 0 ? sku.price : product.base_price,
       quantity,
     });
@@ -115,8 +169,23 @@ const validLead = (conversation) => {
     && conversation.customer?.address?.trim() && conversation.cart?.length);
 };
 
+const normalizedMessage = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const isExplicitConfirmation = (value) => {
+  const text = normalizedMessage(value);
+  if (!text || /\b(khong|chua|sua|doi|huy|nham)\b/.test(text)) return false;
+  return /\b(xac nhan|chot don|dat hang|dong y|dung roi|ok|oke|okay)\b/.test(text);
+};
+
+const confirmationSummary = (conversation) => {
+  const lines = conversation.cart.map((item) => `• ${item.customer_label || item.sku_label || item.product_name} × ${item.quantity}: ${(Number(item.unit_price || 0) * Number(item.quantity || 0)).toLocaleString('vi-VN')}đ`);
+  const total = conversation.cart.reduce((sum, item) => sum + Number(item.unit_price || 0) * Number(item.quantity || 0), 0);
+  return `Candlet xin xác nhận thông tin đặt hàng:\n${lines.join('\n')}\nTạm tính: ${total.toLocaleString('vi-VN')}đ\nNgười nhận: ${conversation.customer.name}\nSố điện thoại: ${conversation.customer.phone}\nĐịa chỉ: ${conversation.customer.address}\n\nBạn kiểm tra lại và trả lời “Xác nhận” nếu mọi thông tin đã đúng nhé.`;
+};
+
 const draftSummary = (draft) => {
-  const lines = draft.items.map((item) => `• ${item.product_name}${item.sku_label ? ` (${item.sku_label})` : ''} × ${item.quantity}`);
+  const lines = draft.items.map((item) => `• ${item.customer_label || item.sku_label || item.product_name} × ${item.quantity}`);
   return `Candlet đã ghi nhận yêu cầu đặt hàng:\n${lines.join('\n')}\nTạm tính: ${draft.total_price.toLocaleString('vi-VN')}đ. Nhân viên sẽ kiểm tra và xác nhận đơn với bạn sớm nhất.`;
 };
 
@@ -204,6 +273,22 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
       return;
     }
 
+    if (conversation.stage === 'confirming' && isExplicitConfirmation(text) && validLead(conversation)) {
+      const draft = await createDraft(conversation);
+      conversation.stage = 'draft_ready';
+      conversation.mode = 'human';
+      conversation.handoff_reason = 'Đơn nháp đang chờ nhân viên duyệt';
+      const reply = draftSummary(draft);
+      conversation.history.push({ role: 'assistant', text: reply });
+      if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
+      await conversation.save();
+      await sendText(psid, reply);
+      eventRecord.status = 'processed';
+      eventRecord.processed_at = new Date();
+      await eventRecord.save();
+      return;
+    }
+
     if (HANDOFF_PATTERN.test(text)) {
       conversation.mode = 'human';
       conversation.stage = 'handoff';
@@ -228,11 +313,8 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
         conversation.stage = 'handoff';
         conversation.handoff_reason = decision.handoff_reason || 'AI yêu cầu chuyển nhân viên';
       } else if (decision.ready_for_draft && validLead(conversation)) {
-        const draft = await createDraft(conversation);
-        conversation.stage = 'draft_ready';
-        conversation.mode = 'human';
-        conversation.handoff_reason = 'Đơn nháp đang chờ nhân viên duyệt';
-        reply = draftSummary(draft);
+        conversation.stage = 'confirming';
+        reply = confirmationSummary(conversation);
       } else {
         conversation.stage = conversation.cart.length ? 'collecting' : 'consulting';
       }
@@ -241,6 +323,32 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
       if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
       await conversation.save();
       await sendText(psid, reply);
+      const shown = new Set((conversation.shown_product_ids || []).map(String));
+      const recommended = (decision.recommended_products || []).filter((product) => !shown.has(String(product._id)));
+      if (recommended.length) {
+        const sentIds = await sendProductCards(psid, recommended).catch((error) => {
+          console.error('[meta-bot] Could not send product cards:', error.message || error);
+          return [];
+        });
+        if (sentIds.length) {
+          await MessengerConversation.findByIdAndUpdate(
+            conversation._id, { $addToSet: { shown_product_ids: { $each: sentIds } } },
+          ).catch((error) => console.error('[meta-bot] Could not remember product cards:', error.message || error));
+        }
+      }
+      const shownMedia = new Set((conversation.shown_media_ids || []).map(String));
+      const recommendedMedia = (decision.recommended_media || []).filter((item) => !shownMedia.has(String(item._id)));
+      if (recommendedMedia.length) {
+        const sentIds = await sendMediaImages(psid, recommendedMedia).catch((error) => {
+          console.error('[meta-bot] Could not send media images:', error.message || error);
+          return [];
+        });
+        if (sentIds.length) {
+          await MessengerConversation.findByIdAndUpdate(
+            conversation._id, { $addToSet: { shown_media_ids: { $each: sentIds } } },
+          ).catch((error) => console.error('[meta-bot] Could not remember media images:', error.message || error));
+        }
+      }
     }
 
     eventRecord.status = 'processed';
@@ -279,4 +387,4 @@ exports.receiveQueuedWebhook = async (req, res) => {
   }
 };
 
-module.exports._private = { resolveCart, validLead, processWebhook, claimEvent };
+module.exports._private = { resolveCart, validLead, processWebhook, claimEvent, isExplicitConfirmation, confirmationSummary, buildProductCardsMessage, buildMediaImageMessage };

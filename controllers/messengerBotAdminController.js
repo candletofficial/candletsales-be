@@ -1,15 +1,26 @@
 const BotOrderDraft = require('../models/BotOrderDraft');
 const MessengerConversation = require('../models/MessengerConversation');
+const MessengerBotKnowledge = require('../models/MessengerBotKnowledge');
+const MessengerProductProfile = require('../models/MessengerProductProfile');
+const MessengerBotMedia = require('../models/MessengerBotMedia');
+const Product = require('../models/Product');
 const Order = require('../models/Order');
 const { createOrder } = require('./orderController');
 const { trackingPath } = require('../utils/orderTracking');
 const { sendMetaText } = require('./metaMessengerController');
+const { deleteCloudinaryImage } = require('../config/cloudinary');
 
 exports.getStatus = async (req, res, next) => {
   try {
-    const [pendingDrafts, humanConversations] = await Promise.all([
+    const [pendingDrafts, humanConversations, botConversations, pausedConversations, recentConversations, knowledge, profileCount, mediaCount] = await Promise.all([
       BotOrderDraft.countDocuments({ status: 'pending' }),
       MessengerConversation.countDocuments({ mode: 'human' }),
+      MessengerConversation.countDocuments({ mode: 'bot' }),
+      MessengerConversation.countDocuments({ mode: 'paused' }),
+      MessengerConversation.countDocuments({ last_activity_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
+      MessengerBotKnowledge.findOne({ key: 'default' }).select('version updatedAt').lean(),
+      MessengerProductProfile.countDocuments({ enabled: true }),
+      MessengerBotMedia.countDocuments({ enabled: true }),
     ]);
     res.json({
       success: true,
@@ -20,8 +31,131 @@ exports.getStatus = async (req, res, next) => {
         model: process.env.OPENAI_SALES_MODEL || 'gpt-5.4-mini',
         pending_drafts: pendingDrafts,
         human_conversations: humanConversations,
+        bot_conversations: botConversations,
+        paused_conversations: pausedConversations,
+        recent_conversations: recentConversations,
+        knowledge_version: knowledge?.version || 1,
+        knowledge_updated_at: knowledge?.updatedAt || null,
+        trained_products: profileCount,
+        enabled_media: mediaCount,
       },
     });
+  } catch (error) { next(error); }
+};
+
+const defaultKnowledge = () => ({
+  key: 'default',
+  brand_voice: 'Ấm áp, tinh tế, chân thành; xưng Candlet và gọi khách là bạn.',
+  greeting: 'Candlet chào bạn. Mình có thể giúp bạn chọn mùi hương phù hợp nhé.',
+  shipping_policy: '', payment_policy: '', return_policy: '', processing_policy: '', gift_policy: '', active_promotion: '',
+  sales_process: '', discovery_questions: [], response_guidelines: [], closing_rules: [], objection_handlers: [],
+  prohibited_claims: ['Không cam kết công dụng điều trị hoặc chữa bệnh', 'Không tự tạo giá hoặc khuyến mãi'],
+  handoff_topics: ['khiếu nại', 'hoàn tiền', 'đổi trả', 'biên lai chuyển khoản', 'vấn đề sức khỏe'],
+  faqs: [], examples: [], version: 1,
+});
+
+exports.getKnowledge = async (req, res, next) => {
+  try {
+    const data = await MessengerBotKnowledge.findOne({ key: 'default' }).lean();
+    res.json({ success: true, data: data || defaultKnowledge() });
+  } catch (error) { next(error); }
+};
+
+exports.updateKnowledge = async (req, res, next) => {
+  try {
+    const allowed = [
+      'brand_voice', 'greeting', 'shipping_policy', 'payment_policy', 'return_policy', 'processing_policy',
+      'gift_policy', 'active_promotion', 'prohibited_claims', 'handoff_topics', 'faqs', 'examples',
+      'sales_process', 'discovery_questions', 'response_guidelines', 'closing_rules', 'objection_handlers',
+    ];
+    const update = {};
+    for (const key of allowed) if (Object.hasOwn(req.body, key)) update[key] = req.body[key];
+    update.updated_by = req.user._id;
+    const data = await MessengerBotKnowledge.findOneAndUpdate(
+      { key: 'default' },
+      { $set: update, $inc: { version: 1 }, $setOnInsert: { key: 'default' } },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: false },
+    );
+    res.json({ success: true, data, message: 'Đã cập nhật kiến thức bot' });
+  } catch (error) { next(error); }
+};
+
+exports.getProductProfiles = async (req, res, next) => {
+  try {
+    const [products, profiles] = await Promise.all([
+      Product.find().select('productId name image description base_price scent_group category volume').sort({ name: 1 }).lean(),
+      MessengerProductProfile.find().lean(),
+    ]);
+    const byProduct = new Map(profiles.map((profile) => [String(profile.product), profile]));
+    const data = products.map((product) => ({ product, profile: byProduct.get(String(product._id)) || null }));
+    res.json({ success: true, data });
+  } catch (error) { next(error); }
+};
+
+exports.updateProductProfile = async (req, res, next) => {
+  try {
+    const product = await Product.findById(req.params.productId).select('_id');
+    if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
+    const allowed = ['enabled', 'scent_notes', 'intensity', 'suitable_spaces', 'occasions', 'moods', 'audiences', 'burn_time', 'selling_points', 'keywords', 'advice_notes'];
+    const update = { product: product._id, updated_by: req.user._id };
+    for (const key of allowed) if (Object.hasOwn(req.body, key)) update[key] = req.body[key];
+    const data = await MessengerProductProfile.findOneAndUpdate(
+      { product: product._id }, { $set: update }, { new: true, upsert: true, runValidators: true },
+    ).populate('product', 'productId name image');
+    res.json({ success: true, data, message: 'Đã cập nhật hồ sơ tư vấn sản phẩm' });
+  } catch (error) { next(error); }
+};
+
+const mediaPayload = (body) => {
+  const allowed = ['name', 'image_url', 'description', 'trigger_keywords', 'usage_notes', 'linked_products', 'enabled', 'priority'];
+  const update = {};
+  for (const key of allowed) if (Object.hasOwn(body, key)) update[key] = body[key];
+  return update;
+};
+
+const validMediaUrl = (value) => {
+  try { return new URL(value).protocol === 'https:'; } catch { return false; }
+};
+
+exports.getMedia = async (req, res, next) => {
+  try {
+    const data = await MessengerBotMedia.find().populate('linked_products', 'productId name image').sort({ priority: -1, updatedAt: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) { next(error); }
+};
+
+exports.createMedia = async (req, res, next) => {
+  try {
+    const payload = mediaPayload(req.body);
+    if (!validMediaUrl(payload.image_url)) return res.status(400).json({ success: false, message: 'Ảnh phải có URL HTTPS công khai' });
+    payload.created_by = req.user._id;
+    payload.updated_by = req.user._id;
+    const data = await MessengerBotMedia.create(payload);
+    res.status(201).json({ success: true, data, message: 'Đã thêm ảnh vào thư viện bot' });
+  } catch (error) { next(error); }
+};
+
+exports.updateMedia = async (req, res, next) => {
+  try {
+    const payload = mediaPayload(req.body);
+    if (payload.image_url && !validMediaUrl(payload.image_url)) return res.status(400).json({ success: false, message: 'Ảnh phải có URL HTTPS công khai' });
+    payload.updated_by = req.user._id;
+    const previous = await MessengerBotMedia.findById(req.params.id).select('image_url').lean();
+    if (!previous) return res.status(404).json({ success: false, message: 'Không tìm thấy ảnh' });
+    const data = await MessengerBotMedia.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: true });
+    if (payload.image_url && previous.image_url !== payload.image_url) {
+      await deleteCloudinaryImage(previous.image_url).catch((error) => console.error('[meta-bot] Could not delete replaced media image:', error.message));
+    }
+    res.json({ success: true, data, message: 'Đã cập nhật ảnh' });
+  } catch (error) { next(error); }
+};
+
+exports.deleteMedia = async (req, res, next) => {
+  try {
+    const data = await MessengerBotMedia.findByIdAndDelete(req.params.id);
+    if (!data) return res.status(404).json({ success: false, message: 'Không tìm thấy ảnh' });
+    await deleteCloudinaryImage(data.image_url).catch((error) => console.error('[meta-bot] Could not delete media image:', error.message));
+    res.json({ success: true, message: 'Đã xóa ảnh khỏi thư viện bot' });
   } catch (error) { next(error); }
 };
 
@@ -43,6 +177,42 @@ exports.updateConversationMode = async (req, res, next) => {
     if (!data) return res.status(404).json({ success: false, message: 'Không tìm thấy hội thoại' });
     res.json({ success: true, data });
   } catch (error) { next(error); }
+};
+
+exports.sendConversationMessage = async (req, res, next) => {
+  try {
+    const text = String(req.body.text || '').trim();
+    if (!text) return res.status(400).json({ success: false, message: 'Nội dung tin nhắn không được để trống' });
+    if (text.length > 1900) return res.status(400).json({ success: false, message: 'Tin nhắn tối đa 1900 ký tự' });
+    const conversation = await MessengerConversation.findById(req.params.id);
+    if (!conversation) return res.status(404).json({ success: false, message: 'Không tìm thấy hội thoại' });
+    await sendMetaText(conversation.psid, text);
+    conversation.mode = 'human';
+    conversation.handoff_reason = 'Nhân viên đang trực tiếp xử lý';
+    conversation.last_activity_at = new Date();
+    conversation.history.push({ role: 'assistant', text });
+    if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
+    await conversation.save();
+    return res.json({ success: true, data: conversation, message: 'Đã gửi tin nhắn' });
+  } catch (error) { return next(error); }
+};
+
+exports.resetConversation = async (req, res, next) => {
+  try {
+    const now = new Date();
+    const data = await MessengerConversation.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          mode: 'bot', stage: 'consulting', customer: { name: '', phone: '', address: '' }, cart: [],
+          shown_product_ids: [], shown_media_ids: [], handoff_reason: '', context_started_at: now, last_activity_at: now,
+        },
+      },
+      { new: true, runValidators: true },
+    );
+    if (!data) return res.status(404).json({ success: false, message: 'Không tìm thấy hội thoại' });
+    return res.json({ success: true, data, message: 'Đã bắt đầu phiên tư vấn mới' });
+  } catch (error) { return next(error); }
 };
 
 exports.getDrafts = async (req, res, next) => {

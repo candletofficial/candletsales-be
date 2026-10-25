@@ -1,5 +1,6 @@
 const Product = require('../models/Product');
 const { removeFileIfLocal } = require('./uploadController');
+const { enrichProductAvailability } = require('../utils/productAvailability');
 
 // Lấy danh sách sản phẩm và tự động tính toán BOM Cost
 exports.getProducts = async (req, res, next) => {
@@ -38,7 +39,7 @@ exports.getProducts = async (req, res, next) => {
         });
       }
 
-      return obj;
+      return enrichProductAvailability(obj);
     });
 
     res.status(200).json({ success: true, data: result });
