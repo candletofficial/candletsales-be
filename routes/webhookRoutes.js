@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { handlePancakeWebhook } = require('../controllers/webhookController');
 const { inspectPancakeWebhook, getInspectLog, clearInspectLog } = require('../controllers/webhookInspectController');
+const metaMessengerController = require('../controllers/metaMessengerController');
 const { protect, adminOnly } = require('../middlewares/authMiddleware');
 
 const verifyPancakeWebhook = (req, res, next) => {
@@ -31,6 +32,8 @@ const verifyPancakeWebhook = (req, res, next) => {
 };
 
 router.post('/pancake', verifyPancakeWebhook, handlePancakeWebhook);
+router.get('/meta', metaMessengerController.verifyWebhook);
+router.post('/meta', metaMessengerController.verifySignature, metaMessengerController.receiveWebhook);
 
 // Inspection endpoints expose customer payloads and are therefore admin-only.
 router.post('/pancake-inspect', protect, adminOnly, inspectPancakeWebhook);

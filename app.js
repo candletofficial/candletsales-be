@@ -26,6 +26,7 @@ const reviewRoutes = require('./routes/reviewRoutes');
 const postRoutes = require('./routes/postRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const sepayRoutes = require('./routes/sepayRoutes');
+const messengerBotRoutes = require('./routes/messengerBotRoutes');
 const app = express();
 
 const configuredOrigins = String(process.env.CLIENT_URL || '')
@@ -59,7 +60,12 @@ app.use(cors({
 }));
 // Must be registered before express.json(): SePay signs the unmodified body.
 app.use('/api/sepay', sepayRoutes);
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify(req, res, buffer) {
+    if (req.originalUrl.startsWith('/api/webhooks/meta')) req.rawBody = Buffer.from(buffer);
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Phục vụ tệp tĩnh tải lên (ảnh sản phẩm, v.v.)
@@ -86,6 +92,7 @@ app.use('/api/coupons', couponRoutes);
 app.use('/api/funds', fundRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/messenger-bot', messengerBotRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/cart', cartRoutes);
