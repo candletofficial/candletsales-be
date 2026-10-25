@@ -7,6 +7,8 @@ const MessengerBotKnowledge = require('../models/MessengerBotKnowledge');
 const MessengerProductProfile = require('../models/MessengerProductProfile');
 const MessengerBotMedia = require('../models/MessengerBotMedia');
 const MessengerConversation = require('../models/MessengerConversation');
+const MessengerEvent = require('../models/MessengerEvent');
+const BotOrderDraft = require('../models/BotOrderDraft');
 const controller = require('../controllers/metaMessengerController');
 const adminController = require('../controllers/messengerBotAdminController');
 const { generateSalesReply, _private: salesBotPrivate } = require('../utils/openaiSalesBot');
@@ -118,7 +120,7 @@ test('OpenAI sales bot uses a strict schema and does not expose the API key in i
       ok: true,
       async json() {
         return { output: [{ content: [{ type: 'output_text', text: JSON.stringify({
-          reply: 'Bạn thích nhóm hương nào ạ?', intent: 'consult', handoff: false,
+          reply: 'Bạn thích nhóm hương nào ạ?', memory_summary: 'Khách đang tìm mùi hương phù hợp.', intent: 'consult', handoff: false,
           handoff_reason: null, customer: { name: null, phone: null, address: null },
           cart: [], recommended_product_ids: ['507f1f77bcf86cd799439011'], recommended_media_ids: [], ready_for_draft: false,
         }) }] }] };
@@ -127,12 +129,14 @@ test('OpenAI sales bot uses a strict schema and does not expose the API key in i
   });
 
   try {
-    const result = await generateSalesReply({ history: [], customer: {}, cart: [], stage: 'consulting', referral: {} }, 'Tư vấn giúp mình');
+    const result = await generateSalesReply({ history: [], customer: {}, cart: [], stage: 'consulting', referral: {}, memory_summary: 'Khách thích hương gỗ.' }, 'Tư vấn giúp mình');
     assert.equal(result.intent, 'consult');
+    assert.equal(result.memory_summary, 'Khách đang tìm mùi hương phù hợp.');
     assert.equal(requestBody.model, 'test-model');
     assert.equal(requestBody.store, false);
     assert.equal(requestBody.text.format.type, 'json_schema');
     assert.equal(requestBody.text.format.strict, true);
+    assert.equal(JSON.parse(requestBody.input).current_state.memory_summary, 'Khách thích hương gỗ.');
     assert.equal(optionsContainSecret(requestBody, 'test-secret-key'), false);
     assert.equal(result.recommended_products[0].name, 'Soft Healing');
   } finally {
@@ -250,12 +254,80 @@ test('admin can reply manually and the conversation switches to human mode', asy
     assert.equal(res.statusCode, 200);
     assert.equal(sentBody.message.text, 'Candlet hỗ trợ bạn ngay đây ạ.');
     assert.equal(conversation.mode, 'human');
+    assert.equal(conversation.archived, false);
     assert.equal(conversation.history.at(-1).role, 'assistant');
     assert.equal(conversation.saved, true);
   } finally {
     mock.restoreAll();
     if (previousToken === undefined) delete process.env.META_PAGE_ACCESS_TOKEN;
     else process.env.META_PAGE_ACCESS_TOKEN = previousToken;
+  }
+});
+
+test('admin can switch the AI bot offline persistently', async () => {
+  let update;
+  mock.method(MessengerBotKnowledge, 'findOneAndUpdate', async (_query, value) => {
+    update = value;
+    return { bot_enabled: value.$set.bot_enabled };
+  });
+  try {
+    const res = response();
+    await adminController.updateBotStatus({ body: { enabled: false }, user: { _id: 'admin-1' } }, res, assert.fail);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.data.bot_enabled, false);
+    assert.equal(update.$set.bot_enabled, false);
+    assert.equal(update.$set.updated_by, 'admin-1');
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('admin status exposes failed and stuck Messenger events', async () => {
+  mock.method(BotOrderDraft, 'countDocuments', async () => 2);
+  mock.method(MessengerConversation, 'countDocuments', async (query) => {
+    if (query.mode === 'human') return 3;
+    if (query.mode === 'bot') return 4;
+    if (query.mode === 'paused') return 1;
+    return 5;
+  });
+  mock.method(MessengerBotKnowledge, 'findOne', () => ({ select: () => ({ lean: async () => ({ bot_enabled: true, version: 7 }) }) }));
+  mock.method(MessengerProductProfile, 'countDocuments', async () => 6);
+  mock.method(MessengerBotMedia, 'countDocuments', async () => 8);
+  mock.method(MessengerEvent, 'countDocuments', async (query) => query.status === 'failed' ? 2 : 1);
+  try {
+    const res = response();
+    await adminController.getStatus({}, res, assert.fail);
+    assert.equal(res.body.data.failed_events_24h, 2);
+    assert.equal(res.body.data.stuck_events, 1);
+    assert.equal(res.body.data.pending_drafts, 2);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('admin can archive, restore and permanently delete a conversation', async () => {
+  const updates = [];
+  mock.method(MessengerConversation, 'findByIdAndUpdate', async (_id, value) => {
+    updates.push(value);
+    return { _id: 'conversation-1', archived: value.$set.archived };
+  });
+  mock.method(MessengerConversation, 'findByIdAndDelete', async () => ({ _id: 'conversation-1' }));
+  try {
+    const archived = response();
+    await adminController.archiveConversation({ params: { id: 'conversation-1' }, body: { archived: true }, user: { _id: 'admin-1' } }, archived, assert.fail);
+    assert.equal(archived.body.data.archived, true);
+    assert.equal(updates[0].$set.archived_by, 'admin-1');
+
+    const restored = response();
+    await adminController.archiveConversation({ params: { id: 'conversation-1' }, body: { archived: false }, user: { _id: 'admin-1' } }, restored, assert.fail);
+    assert.equal(restored.body.data.archived, false);
+    assert.equal(updates[1].$set.archived_at, null);
+
+    const deleted = response();
+    await adminController.deleteConversation({ params: { id: 'conversation-1' } }, deleted, assert.fail);
+    assert.equal(deleted.statusCode, 200);
+  } finally {
+    mock.restoreAll();
   }
 });
 
@@ -272,6 +344,7 @@ test('starting a new consultation resets state while preserving history', async 
     assert.equal(update.$set.mode, 'bot');
     assert.equal(update.$set.stage, 'consulting');
     assert.deepEqual(update.$set.cart, []);
+    assert.equal(update.$set.memory_summary, '');
     assert.ok(update.$set.context_started_at instanceof Date);
     assert.equal(Object.hasOwn(update.$set, 'history'), false);
   } finally {

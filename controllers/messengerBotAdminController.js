@@ -3,29 +3,35 @@ const MessengerConversation = require('../models/MessengerConversation');
 const MessengerBotKnowledge = require('../models/MessengerBotKnowledge');
 const MessengerProductProfile = require('../models/MessengerProductProfile');
 const MessengerBotMedia = require('../models/MessengerBotMedia');
+const MessengerEvent = require('../models/MessengerEvent');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const { createOrder } = require('./orderController');
 const { trackingPath } = require('../utils/orderTracking');
-const { sendMetaText } = require('./metaMessengerController');
+const { sendMetaText, fetchMetaProfile } = require('./metaMessengerController');
 const { deleteCloudinaryImage } = require('../config/cloudinary');
 
 exports.getStatus = async (req, res, next) => {
   try {
-    const [pendingDrafts, humanConversations, botConversations, pausedConversations, recentConversations, knowledge, profileCount, mediaCount] = await Promise.all([
+    const recentSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const staleSince = new Date(Date.now() - 2 * 60 * 1000);
+    const [pendingDrafts, humanConversations, botConversations, pausedConversations, recentConversations, knowledge, profileCount, mediaCount, failedEvents, stuckEvents] = await Promise.all([
       BotOrderDraft.countDocuments({ status: 'pending' }),
-      MessengerConversation.countDocuments({ mode: 'human' }),
-      MessengerConversation.countDocuments({ mode: 'bot' }),
-      MessengerConversation.countDocuments({ mode: 'paused' }),
-      MessengerConversation.countDocuments({ last_activity_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
-      MessengerBotKnowledge.findOne({ key: 'default' }).select('version updatedAt').lean(),
+      MessengerConversation.countDocuments({ mode: 'human', archived: { $ne: true } }),
+      MessengerConversation.countDocuments({ mode: 'bot', archived: { $ne: true } }),
+      MessengerConversation.countDocuments({ mode: 'paused', archived: { $ne: true } }),
+      MessengerConversation.countDocuments({ archived: { $ne: true }, last_activity_at: { $gte: recentSince } }),
+      MessengerBotKnowledge.findOne({ key: 'default' }).select('bot_enabled version updatedAt').lean(),
       MessengerProductProfile.countDocuments({ enabled: true }),
       MessengerBotMedia.countDocuments({ enabled: true }),
+      MessengerEvent.countDocuments({ status: 'failed', updatedAt: { $gte: recentSince } }),
+      MessengerEvent.countDocuments({ status: 'processing', updatedAt: { $lte: staleSince } }),
     ]);
     res.json({
       success: true,
       data: {
         configured: Boolean(process.env.OPENAI_API_KEY && process.env.META_PAGE_ACCESS_TOKEN && process.env.META_VERIFY_TOKEN && process.env.META_APP_SECRET),
+        bot_enabled: knowledge?.bot_enabled !== false,
         openai_configured: Boolean(process.env.OPENAI_API_KEY),
         meta_configured: Boolean(process.env.META_PAGE_ACCESS_TOKEN && process.env.META_VERIFY_TOKEN && process.env.META_APP_SECRET),
         model: process.env.OPENAI_SALES_MODEL || 'gpt-5.4-mini',
@@ -38,13 +44,28 @@ exports.getStatus = async (req, res, next) => {
         knowledge_updated_at: knowledge?.updatedAt || null,
         trained_products: profileCount,
         enabled_media: mediaCount,
+        failed_events_24h: failedEvents,
+        stuck_events: stuckEvents,
       },
     });
   } catch (error) { next(error); }
 };
 
+exports.updateBotStatus = async (req, res, next) => {
+  try {
+    if (typeof req.body.enabled !== 'boolean') return res.status(400).json({ success: false, message: 'Trạng thái bot không hợp lệ' });
+    const data = await MessengerBotKnowledge.findOneAndUpdate(
+      { key: 'default' },
+      { $set: { bot_enabled: req.body.enabled, updated_by: req.user._id }, $setOnInsert: { key: 'default' } },
+      { new: true, upsert: true, runValidators: true },
+    );
+    return res.json({ success: true, data: { bot_enabled: data.bot_enabled }, message: data.bot_enabled ? 'Bot AI đã hoạt động' : 'Bot AI đã chuyển sang ngoại tuyến' });
+  } catch (error) { return next(error); }
+};
+
 const defaultKnowledge = () => ({
   key: 'default',
+  bot_enabled: true,
   brand_voice: 'Ấm áp, tinh tế, chân thành; xưng Candlet và gọi khách là bạn.',
   greeting: 'Candlet chào bạn. Mình có thể giúp bạn chọn mùi hương phù hợp nhé.',
   shipping_policy: '', payment_policy: '', return_policy: '', processing_policy: '', gift_policy: '', active_promotion: '',
@@ -161,9 +182,46 @@ exports.deleteMedia = async (req, res, next) => {
 
 exports.getConversations = async (req, res, next) => {
   try {
-    const data = await MessengerConversation.find().sort({ last_activity_at: -1 }).limit(100).lean();
-    res.json({ success: true, data });
+    const archived = req.query.archived;
+    const query = archived === 'all' ? {} : archived === 'true' ? { archived: true } : { archived: { $ne: true } };
+    const conversations = await MessengerConversation.find(query).sort({ last_activity_at: -1 }).limit(100);
+    const staleBefore = Date.now() - 24 * 60 * 60 * 1000;
+    const missingProfiles = process.env.META_PAGE_ACCESS_TOKEN
+      ? conversations.filter((item) => !item.profile_name
+        && (!item.profile_lookup_at || new Date(item.profile_lookup_at).getTime() < staleBefore)).slice(0, 20)
+      : [];
+    await Promise.all(missingProfiles.map(async (conversation) => {
+      const profile = await fetchMetaProfile(conversation.psid);
+      conversation.profile_lookup_at = new Date();
+      if (profile?.name) conversation.profile_name = profile.name;
+      if (profile?.picture) conversation.profile_picture = profile.picture;
+      await conversation.save();
+    }));
+    res.json({ success: true, data: conversations.map((item) => item.toObject()) });
   } catch (error) { next(error); }
+};
+
+exports.archiveConversation = async (req, res, next) => {
+  try {
+    if (typeof req.body.archived !== 'boolean') return res.status(400).json({ success: false, message: 'Trạng thái lưu trữ không hợp lệ' });
+    const data = await MessengerConversation.findByIdAndUpdate(
+      req.params.id,
+      req.body.archived
+        ? { $set: { archived: true, archived_at: new Date(), archived_by: req.user._id } }
+        : { $set: { archived: false, archived_at: null, archived_by: null } },
+      { new: true, runValidators: true },
+    );
+    if (!data) return res.status(404).json({ success: false, message: 'Không tìm thấy hội thoại' });
+    return res.json({ success: true, data, message: data.archived ? 'Đã lưu trữ hội thoại' : 'Đã khôi phục hội thoại' });
+  } catch (error) { return next(error); }
+};
+
+exports.deleteConversation = async (req, res, next) => {
+  try {
+    const data = await MessengerConversation.findByIdAndDelete(req.params.id);
+    if (!data) return res.status(404).json({ success: false, message: 'Không tìm thấy hội thoại' });
+    return res.json({ success: true, message: 'Đã xóa hội thoại' });
+  } catch (error) { return next(error); }
 };
 
 exports.updateConversationMode = async (req, res, next) => {
@@ -188,10 +246,13 @@ exports.sendConversationMessage = async (req, res, next) => {
     if (!conversation) return res.status(404).json({ success: false, message: 'Không tìm thấy hội thoại' });
     await sendMetaText(conversation.psid, text);
     conversation.mode = 'human';
+    conversation.archived = false;
+    conversation.archived_at = null;
+    conversation.archived_by = null;
     conversation.handoff_reason = 'Nhân viên đang trực tiếp xử lý';
     conversation.last_activity_at = new Date();
     conversation.history.push({ role: 'assistant', text });
-    if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
+    if (conversation.history.length > 60) conversation.history = conversation.history.slice(-60);
     await conversation.save();
     return res.json({ success: true, data: conversation, message: 'Đã gửi tin nhắn' });
   } catch (error) { return next(error); }
@@ -205,7 +266,7 @@ exports.resetConversation = async (req, res, next) => {
       {
         $set: {
           mode: 'bot', stage: 'consulting', customer: { name: '', phone: '', address: '' }, cart: [],
-          shown_product_ids: [], shown_media_ids: [], handoff_reason: '', context_started_at: now, last_activity_at: now,
+          shown_product_ids: [], shown_media_ids: [], memory_summary: '', handoff_reason: '', context_started_at: now, last_activity_at: now,
         },
       },
       { new: true, runValidators: true },

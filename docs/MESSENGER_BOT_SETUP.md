@@ -80,6 +80,14 @@ Không đặt callback Meta trực tiếp về Render khi dùng Queue. Route `/a
 
 Mở `/admin/messenger-bot` để xem hội thoại cần người xử lý, tạm dừng hoặc tiếp tục bot theo từng khách, và duyệt hoặc từ chối đơn nháp. Khi duyệt, hệ thống tạo đơn Facebook có mã theo dõi, kiểm tra và trừ nguyên liệu, rồi gửi mã đơn cùng liên kết theo dõi cho khách.
 
+Trong tab **Vận hành**, công tắc trạng thái cho phép chuyển toàn bộ AI sang Online hoặc Offline. Ở trạng thái Offline, Worker và Queue vẫn nhận sự kiện, backend vẫn lưu tin nhắn và tự khôi phục hội thoại đã lưu trữ khi khách nhắn lại, nhưng AI không tạo hoặc gửi câu trả lời. Nhân viên vẫn có thể trả lời thủ công.
+
+Hội thoại có thể được **Lưu trữ** để ẩn khỏi hộp thư đang hoạt động, **Khôi phục** khi cần, hoặc **Xóa** vĩnh viễn. Việc xóa hội thoại không xóa đơn hàng thật đã tạo từ đơn nháp.
+
+Bot duy trì một bản tóm tắt bộ nhớ cho từng PSID, gồm nhu cầu, sở thích mùi hương, sản phẩm đang cân nhắc, dữ liệu khách đã cung cấp và phần tư vấn còn dang dở. Bản tóm tắt được cập nhật sau mỗi lượt AI và lưu trong MongoDB, vì vậy không mất khi Render khởi động lại. Nút **Phiên tư vấn mới** chủ động xóa bộ nhớ này.
+
+Trung tâm hội thoại ưu tiên tên và ảnh đại diện Page-scoped lấy từ Meta User Profile API, sau đó mới dùng tên khách tự cung cấp trong quá trình chốt đơn. App cần quyền hồ sơ người dùng phù hợp của Meta để đọc tên của người nhắn; nếu Meta từ chối quyền, giao diện dùng mã Messenger rút gọn làm tên dự phòng. Hệ thống chỉ thử đồng bộ lại hồ sơ thiếu sau mỗi 24 giờ để tránh gọi API liên tục.
+
 ### Huấn luyện chuyên sâu
 
 Tab **Huấn luyện chuyên sâu** cho phép admin khai báo quy trình tư vấn, câu hỏi khám phá nhu cầu, nguyên tắc trả lời, quy tắc chốt đơn và cách xử lý từng phản đối. Mỗi tình huống phản đối nhập theo mẫu `Băn khoăn của khách | Cách xử lý mong muốn`. Bot kết hợp dữ liệu này với chính sách, FAQ, ví dụ hội thoại và hồ sơ từng sản phẩm; đây là cập nhật ngữ cảnh vận hành, không phải fine-tune mô hình.
@@ -120,4 +128,6 @@ Queue ngăn tin nhắn bị mất trong thời gian Render cold-start và tự t
 - Bot không tạo đơn thật trước khi khách xác nhận và admin duyệt.
 - Khiếu nại, hoàn tiền, biên lai chuyển khoản, nội dung sức khỏe và yêu cầu gặp người thật được chuyển cho nhân viên.
 - Meta message ID đã xử lý được bỏ qua trong 30 ngày; sự kiện lỗi hoặc bị kẹt quá thời gian lease có thể được Queue thử lại.
+- Dashboard tự đồng bộ dữ liệu vận hành mỗi 15 giây và cảnh báo sự kiện Messenger lỗi hoặc xử lý quá lâu.
+- Nếu cùng một sự kiện vẫn lỗi sau 3 lần xử lý qua Queue, hội thoại được chuyển sang chế độ nhân viên để không bỏ quên khách.
 - OpenAI nhận danh mục sản phẩm và phần hội thoại gần nhất; request dùng `store: false`.

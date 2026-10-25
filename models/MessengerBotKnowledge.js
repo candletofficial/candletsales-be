@@ -17,6 +17,7 @@ const objectionSchema = new mongoose.Schema({
 
 const schema = new mongoose.Schema({
   key: { type: String, default: 'default', unique: true, immutable: true },
+  bot_enabled: { type: Boolean, default: true },
   brand_voice: { type: String, default: 'Ấm áp, tinh tế, chân thành; xưng Candlet và gọi khách là bạn.' },
   greeting: { type: String, default: 'Candlet chào bạn. Mình có thể giúp bạn chọn mùi hương phù hợp nhé.' },
   shipping_policy: { type: String, default: '' },

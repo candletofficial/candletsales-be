@@ -21,6 +21,9 @@ const cartItemSchema = new mongoose.Schema({
 const messengerConversationSchema = new mongoose.Schema({
   page_id: { type: String, required: true, index: true },
   psid: { type: String, required: true },
+  profile_name: { type: String, default: '', trim: true },
+  profile_picture: { type: String, default: '', trim: true },
+  profile_lookup_at: { type: Date, default: null },
   mode: { type: String, enum: ['bot', 'human', 'paused'], default: 'bot' },
   stage: { type: String, enum: ['consulting', 'collecting', 'confirming', 'draft_ready', 'handoff'], default: 'consulting' },
   customer: {
@@ -39,8 +42,12 @@ const messengerConversationSchema = new mongoose.Schema({
   },
   history: { type: [historySchema], default: [] },
   handoff_reason: { type: String, default: '' },
+  memory_summary: { type: String, default: '', maxlength: 2000 },
   context_started_at: { type: Date, default: null },
   last_activity_at: { type: Date, default: Date.now },
+  archived: { type: Boolean, default: false, index: true },
+  archived_at: { type: Date, default: null },
+  archived_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });
 
 messengerConversationSchema.index({ page_id: 1, psid: 1 }, { unique: true });

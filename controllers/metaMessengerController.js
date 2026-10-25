@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const BotOrderDraft = require('../models/BotOrderDraft');
 const MessengerConversation = require('../models/MessengerConversation');
 const MessengerEvent = require('../models/MessengerEvent');
+const MessengerBotKnowledge = require('../models/MessengerBotKnowledge');
 const Product = require('../models/Product');
 const { generateSalesReply } = require('../utils/openaiSalesBot');
 
@@ -63,6 +64,22 @@ const sendMessage = async (psid, message) => {
   return payload;
 };
 
+const fetchMessengerProfile = async (psid) => {
+  const token = process.env.META_PAGE_ACCESS_TOKEN;
+  if (!token) return null;
+  const version = process.env.META_GRAPH_VERSION || 'v24.0';
+  const fields = 'first_name,last_name,name,profile_pic';
+  try {
+    const response = await fetch(`https://graph.facebook.com/${version}/${encodeURIComponent(psid)}?fields=${fields}&access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const name = String(data.name || [data.first_name, data.last_name].filter(Boolean).join(' ')).trim();
+    return { name, picture: String(data.profile_pic || '').trim() };
+  } catch { return null; }
+};
+
 const sendText = (psid, text) => sendMessage(psid, { text: String(text).slice(0, 1900) });
 
 const buildProductCardsMessage = (products) => {
@@ -108,6 +125,7 @@ const sendMediaImages = async (psid, items) => {
 };
 
 exports.sendMetaText = sendText;
+exports.fetchMetaProfile = fetchMessengerProfile;
 
 const referralFrom = (event) => {
   const referral = event.referral || event.postback?.referral || {};
@@ -250,22 +268,39 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
     return;
   }
 
+  let conversation;
   try {
     const referral = referralFrom(event);
     const hasReferral = Object.values(referral).some(Boolean);
-    let conversation = await MessengerConversation.findOneAndUpdate(
+    conversation = await MessengerConversation.findOneAndUpdate(
       { page_id: pageId, psid },
       {
         $setOnInsert: { page_id: pageId, psid },
-        $set: { last_activity_at: new Date(), ...(hasReferral ? { referral } : {}) },
+        $set: { last_activity_at: new Date(), archived: false, archived_at: null, archived_by: null, ...(hasReferral ? { referral } : {}) },
       },
       { new: true, upsert: true, runValidators: true },
     );
 
+    if (!conversation.profile_name) {
+      const profile = await fetchMessengerProfile(psid);
+      conversation.profile_lookup_at = new Date();
+      if (profile?.name) conversation.profile_name = profile.name;
+      if (profile?.picture) conversation.profile_picture = profile.picture;
+    }
+
     conversation.history.push({ role: 'user', text });
-    if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
+    if (conversation.history.length > 60) conversation.history = conversation.history.slice(-60);
 
     if (conversation.mode !== 'bot') {
+      await conversation.save();
+      eventRecord.status = 'ignored';
+      eventRecord.processed_at = new Date();
+      await eventRecord.save();
+      return;
+    }
+
+    const botSettings = await MessengerBotKnowledge.findOne({ key: 'default' }).select('bot_enabled').lean();
+    if (botSettings?.bot_enabled === false) {
       await conversation.save();
       eventRecord.status = 'ignored';
       eventRecord.processed_at = new Date();
@@ -280,7 +315,7 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
       conversation.handoff_reason = 'Đơn nháp đang chờ nhân viên duyệt';
       const reply = draftSummary(draft);
       conversation.history.push({ role: 'assistant', text: reply });
-      if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
+      if (conversation.history.length > 60) conversation.history = conversation.history.slice(-60);
       await conversation.save();
       await sendText(psid, reply);
       eventRecord.status = 'processed';
@@ -299,6 +334,7 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
       await sendText(psid, reply);
     } else {
       const decision = await generateSalesReply(conversation, text);
+      if (decision.memory_summary) conversation.memory_summary = String(decision.memory_summary).slice(0, 2000);
       if (decision.customer?.name) conversation.customer.name = decision.customer.name.trim();
       if (decision.customer?.phone) conversation.customer.phone = decision.customer.phone.trim();
       if (decision.customer?.address) conversation.customer.address = decision.customer.address.trim();
@@ -320,7 +356,7 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
       }
 
       conversation.history.push({ role: 'assistant', text: reply });
-      if (conversation.history.length > 30) conversation.history = conversation.history.slice(-30);
+      if (conversation.history.length > 60) conversation.history = conversation.history.slice(-60);
       await conversation.save();
       await sendText(psid, reply);
       const shown = new Set((conversation.shown_product_ids || []).map(String));
@@ -355,12 +391,20 @@ const processMessage = async (pageId, event, { retryFailures = false } = {}) => 
     eventRecord.processed_at = new Date();
     await eventRecord.save();
   } catch (error) {
-    eventRecord.status = 'failed';
+    const shouldHandoff = !retryFailures || eventRecord.attempts >= 3;
+    eventRecord.status = shouldHandoff ? 'processed' : 'failed';
     eventRecord.error = String(error.message || error).slice(0, 500);
     eventRecord.processed_at = new Date();
     await eventRecord.save().catch(() => {});
     console.error('[meta-bot] Message processing failed:', error.message || error);
-    if (retryFailures) throw error;
+    if (!shouldHandoff) throw error;
+    if (conversation) {
+      conversation.mode = 'human';
+      conversation.stage = 'handoff';
+      conversation.handoff_reason = 'Bot gặp lỗi xử lý, cần nhân viên tiếp quản';
+      conversation.last_activity_at = new Date();
+      await conversation.save().catch(() => {});
+    }
     await sendText(psid, 'Candlet đang chuyển tin nhắn của bạn cho nhân viên hỗ trợ. Bạn vui lòng chờ một chút nhé.').catch(() => {});
   }
 };
