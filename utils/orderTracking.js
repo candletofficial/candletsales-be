@@ -47,6 +47,9 @@ function publicTrackingOrder(order) {
     payment_method: order.payment_method,
     payment_status: order.payment_status,
     shippingMethod: order.shippingMethod,
+    shipping_carrier: order.shipping_carrier || '',
+    tracking_number: order.tracking_number || '',
+    tracking_url: order.tracking_url || '',
     customer: {
       name: order.customer_name || '',
       phone: order.customer_phone || '',

@@ -218,7 +218,7 @@ exports.createOrder = async (req, res, next) => {
     if (createTracking && req.user?.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Chỉ quản trị viên được tạo link theo dõi.' });
     }
-    let { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, user_id, payment_method, shippingMethod, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
+    let { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, user_id, payment_method, shippingMethod, shipping_carrier, tracking_number, tracking_url, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
     if (Array.isArray(items)) items = preserveOrderMaterials(items);
     req.body.items = items;
 
@@ -393,6 +393,9 @@ exports.createOrder = async (req, res, next) => {
       payment_transaction_id: confirmedPayment ? confirmedPayment.transactionId : null,
       paid_at: isPaidPayment ? new Date() : null,
       shippingMethod: shippingMethod || 'standard',
+      shipping_carrier: typeof shipping_carrier === 'string' ? shipping_carrier.trim() : '',
+      tracking_number: typeof tracking_number === 'string' ? tracking_number.trim() : '',
+      tracking_url: typeof tracking_url === 'string' ? tracking_url.trim() : '',
       shipping_fee: shipping_fee || 0,
       packaging_cost: packagingCost,
       note: note || '',
@@ -510,7 +513,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    let { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code, delivery_status, status } = req.body;
+    let { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, shipping_carrier, tracking_number, tracking_url, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code, delivery_status, status } = req.body;
 
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -710,6 +713,9 @@ exports.updateOrder = async (req, res, next) => {
       customer_address, 
       payment_method, 
       shippingMethod, 
+      shipping_carrier: typeof shipping_carrier === 'string' ? shipping_carrier.trim() : oldOrder.shipping_carrier,
+      tracking_number: typeof tracking_number === 'string' ? tracking_number.trim() : oldOrder.tracking_number,
+      tracking_url: typeof tracking_url === 'string' ? tracking_url.trim() : oldOrder.tracking_url,
       packaging_cost: packagingCost, 
       note, 
       is_replacement: is_replacement || false, 
@@ -1134,7 +1140,7 @@ exports.buildMaterialDeductions = buildMaterialDeductions;
 // PATCH /api/orders/:id/delivery-status
 exports.updateDeliveryStatus = async (req, res, next) => {
   try {
-    const { delivery_status, cancelled_reason, return_cost, orderId, logistics_cost } = req.body;
+    const { delivery_status, cancelled_reason, return_cost, orderId, logistics_cost, shipping_carrier, tracking_number, tracking_url } = req.body;
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
@@ -1144,6 +1150,10 @@ exports.updateDeliveryStatus = async (req, res, next) => {
     }
     const transitionError = trackingTransitionError(order, delivery_status);
     if (transitionError) return res.status(400).json({ success: false, message: transitionError });
+
+    if (typeof shipping_carrier === 'string') order.shipping_carrier = shipping_carrier.trim();
+    if (typeof tracking_number === 'string') order.tracking_number = tracking_number.trim();
+    if (typeof tracking_url === 'string') order.tracking_url = tracking_url.trim();
 
     // Nếu có cập nhật orderId mới từ app giao vận bên ngoài
     if (orderId && orderId.trim() && orderId.trim() !== order.orderId) {

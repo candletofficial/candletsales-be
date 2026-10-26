@@ -95,6 +95,9 @@ const orderSchema = new mongoose.Schema({
     enum: ['standard', 'express'],
     default: 'standard'
   },
+  shipping_carrier: { type: String, default: '' },
+  tracking_number: { type: String, default: '' },
+  tracking_url: { type: String, default: '' },
   shipping_fee: { type: Number, default: 0 },
   packaging_cost: { type: Number, default: 0 },
   note: { type: String, default: '' },
