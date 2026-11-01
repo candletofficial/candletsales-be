@@ -2,7 +2,8 @@ const AdCost = require('../models/AdCost');
 const AffiliateFee = require('../models/AffiliateFee');
 const FundTransaction = require('../models/FundTransaction');
 
-const PLATFORMS = ['facebook', 'tiktok', 'shopee', 'website', 'instagram', 'youtube'];
+const PLATFORMS = ['facebook', 'tiktok', 'shopee', 'website', 'instagram', 'other'];
+const platformValues = platform => platform === 'other' ? ['other', 'youtube'] : [platform];
 
 // GET /api/ad-costs/balances
 exports.getBalances = async (req, res, next) => {
@@ -30,10 +31,18 @@ exports.getBalances = async (req, res, next) => {
     ]);
 
     const topupMap = {};
-    topupAgg.forEach(item => { if (item._id) topupMap[item._id] = item.totalTopup; });
+    topupAgg.forEach(item => {
+      if (!item._id) return;
+      const platform = item._id === 'youtube' ? 'other' : item._id;
+      topupMap[platform] = (topupMap[platform] || 0) + item.totalTopup;
+    });
 
     const costMap = {};
-    costAgg.forEach(item => { if (item._id) costMap[item._id] = item.totalSpent; });
+    costAgg.forEach(item => {
+      if (!item._id) return;
+      const platform = item._id === 'youtube' ? 'other' : item._id;
+      costMap[platform] = (costMap[platform] || 0) + item.totalSpent;
+    });
 
     const balances = PLATFORMS.map(platform => {
       const totalTopup = topupMap[platform] || 0;
@@ -65,7 +74,7 @@ exports.topupPlatform = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Số tiền nạp không hợp lệ' });
     }
 
-    if (fundingSource === 'platform' && (platform === 'facebook' || platform === 'instagram')) {
+    if (fundingSource === 'platform' && ['facebook', 'instagram', 'other'].includes(platform)) {
       return res.status(400).json({ success: false, message: 'Facebook và Instagram chỉ có thể nạp từ tài sản chung' });
     }
 
@@ -162,7 +171,8 @@ exports.getAdCosts = async (req, res, next) => {
       filter.date = { $gte: start, $lte: end };
     }
 
-    const records = await AdCost.find(filter).sort({ date: 1 });
+    const records = (await AdCost.find(filter).sort({ date: 1 }).lean())
+      .map(record => ({ ...record, platform: record.platform === 'youtube' ? 'other' : record.platform }));
     res.status(200).json({ success: true, data: records });
   } catch (error) {
     next(error);
@@ -176,7 +186,7 @@ exports.createAdCost = async (req, res, next) => {
 
     // Kiểm tra số dư quảng cáo
     const topupAgg = await FundTransaction.aggregate([
-      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: platform } },
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: { $in: platformValues(platform) } } },
       { $group: { 
           _id: null, 
           totalTopup: { 
@@ -189,7 +199,7 @@ exports.createAdCost = async (req, res, next) => {
     const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
 
     const costAgg = await AdCost.aggregate([
-      { $match: { platform } },
+      { $match: { platform: { $in: platformValues(platform) } } },
       { $group: { _id: null, totalSpent: { $sum: '$base_amount' } } }
     ]);
     const totalSpent = costAgg.length > 0 ? costAgg[0].totalSpent : 0;
@@ -220,7 +230,7 @@ exports.updateAdCost = async (req, res, next) => {
 
     // Kiểm tra số dư quảng cáo nếu platform hoặc base_amount đổi
     const topupAgg = await FundTransaction.aggregate([
-      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: platform } },
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: { $in: platformValues(platform) } } },
       { $group: { 
           _id: null, 
           totalTopup: { 
@@ -233,13 +243,14 @@ exports.updateAdCost = async (req, res, next) => {
     const totalTopup = topupAgg.length > 0 ? topupAgg[0].totalTopup : 0;
 
     const costAgg = await AdCost.aggregate([
-      { $match: { platform } },
+      { $match: { platform: { $in: platformValues(platform) } } },
       { $group: { _id: null, totalSpent: { $sum: '$base_amount' } } }
     ]);
     const totalSpent = costAgg.length > 0 ? costAgg[0].totalSpent : 0;
 
     // The available balance assuming the old record is reverted
-    const availableBalance = (totalTopup - totalSpent) + (oldRecord.platform === platform ? oldRecord.base_amount : 0);
+    const availableBalance = (totalTopup - totalSpent)
+      + (platformValues(platform).includes(oldRecord.platform) ? oldRecord.base_amount : 0);
     
     if (availableBalance < Number(base_amount)) {
       return res.status(400).json({ success: false, message: `Số dư tài khoản quảng cáo ${platform} không đủ (Khả dụng: ${availableBalance.toLocaleString('vi-VN')} đ)` });
@@ -288,7 +299,7 @@ exports.syncAdCost = async (req, res, next) => {
 
     // Lấy tổng nạp + điều chỉnh hiện tại
     const topupAgg = await FundTransaction.aggregate([
-      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: platform } },
+      { $match: { type: { $in: ['ad_topup', 'ad_adjustment'] }, source: { $in: platformValues(platform) } } },
       { $group: { 
           _id: null, 
           totalTopup: { 
@@ -302,7 +313,7 @@ exports.syncAdCost = async (req, res, next) => {
 
     // Lấy tổng chi
     const costAgg = await AdCost.aggregate([
-      { $match: { platform: platform } },
+      { $match: { platform: { $in: platformValues(platform) } } },
       { $group: { _id: null, totalSpent: { $sum: '$base_amount' } } }
     ]);
     const totalSpent = costAgg.length > 0 ? costAgg[0].totalSpent : 0;

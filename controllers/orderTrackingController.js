@@ -31,7 +31,7 @@ exports.createTrackingLink = async (req, res, next) => {
             order_id: order._id,
             $or: [
               { type: 'order_revenue' },
-              { type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] }, note: /^Tự động chuyển doanh thu / },
+              { type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
             ],
           }, { session });
         }

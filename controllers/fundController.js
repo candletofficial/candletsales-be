@@ -4,8 +4,15 @@ const ImportTicket = require('../models/ImportTicket');
 const mongoose = require('mongoose');
 const { groupFundHistory, filterFundHistory, LEGACY_PAIR_WINDOW_MS } = require('../utils/groupFundHistory');
 const { filterOrphanOrderRevenue } = require('../utils/filterOrphanOrderRevenue');
+const { getFundAccountIds, buildOrderRevenueMap } = require('../utils/carrierCodAccounts');
 
-const PLATFORMS = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
+const getRecognizedFundAccountIds = async () => {
+  const [configured, historical] = await Promise.all([
+    getFundAccountIds(),
+    Order.distinct('revenue_account', { revenue_account: /^carrier_/ }),
+  ]);
+  return [...new Set([...configured, ...historical.filter(Boolean)])];
+};
 
 exports.getSummary = async (req, res) => {
   try {
@@ -17,10 +24,9 @@ exports.getSummary = async (req, res) => {
 
     // 2. Calculate Platform Balances
     // Get total revenue for each platform
-    const orderRevenueAgg = await Order.aggregate([
-      { $match: { status: 'completed' } },
-      { $group: { _id: '$source', totalRevenue: { $sum: '$total_price' } } }
-    ]);
+    const completedOrders = await Order.find({ status: 'completed' })
+      .select('source total_price tracking_enabled payment_method shipping_carrier revenue_account')
+      .lean();
 
     // Get total withdrawn for each platform
     const withdrawnAgg = await FundTransaction.aggregate([
@@ -33,14 +39,9 @@ exports.getSummary = async (req, res) => {
       { $group: { _id: '$source', totalAdjustment: { $sum: '$platform_change' } } }
     ]);
 
-    const revenueMap = {};
+    const revenueMap = await buildOrderRevenueMap(completedOrders);
     const withdrawnMap = {};
     const adjustmentMap = {};
-
-    orderRevenueAgg.forEach(item => {
-      const source = item._id || 'khác';
-      revenueMap[source] = item.totalRevenue;
-    });
 
     withdrawnAgg.forEach(item => {
       const source = item._id || 'khác';
@@ -52,7 +53,14 @@ exports.getSummary = async (req, res) => {
       adjustmentMap[source] = item.totalAdjustment;
     });
 
-    const platformBalances = PLATFORMS.map(platform => {
+    const configuredAccounts = await getFundAccountIds();
+    const platforms = [...new Set([
+      ...configuredAccounts,
+      ...Object.keys(revenueMap).filter(platform => platform.startsWith('carrier_')),
+      ...Object.keys(withdrawnMap).filter(platform => platform.startsWith('carrier_')),
+      ...Object.keys(adjustmentMap).filter(platform => platform.startsWith('carrier_')),
+    ])];
+    const platformBalances = platforms.map(platform => {
       const totalRevenue = revenueMap[platform] || 0;
       const totalWithdrawn = withdrawnMap[platform] || 0;
       const totalAdjustment = adjustmentMap[platform] || 0;
@@ -229,7 +237,8 @@ exports.withdrawRevenue = async (req, res) => {
   try {
     const { source, amount, fee, note, created_by } = req.body;
 
-    if (!PLATFORMS.includes(source)) {
+    const fundAccounts = await getRecognizedFundAccountIds();
+    if (!fundAccounts.includes(source)) {
       return res.status(400).json({ success: false, message: 'Nền tảng không hợp lệ' });
     }
 
@@ -243,11 +252,11 @@ exports.withdrawRevenue = async (req, res) => {
     }
 
     // Double check if available balance is sufficient
-    const orderRevenueAgg = await Order.aggregate([
-      { $match: { status: 'completed', source } },
-      { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
-    ]);
-    const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;
+    const completedOrders = await Order.find({ status: 'completed' })
+      .select('source total_price tracking_enabled payment_method shipping_carrier revenue_account')
+      .lean();
+    const revenueMap = await buildOrderRevenueMap(completedOrders);
+    const totalRevenue = revenueMap[source] || 0;
 
     const withdrawnAgg = await FundTransaction.aggregate([
       { $match: { type: 'revenue_withdrawal', source } },
@@ -307,13 +316,13 @@ exports.syncFund = async (req, res) => {
         await transaction.save();
       }
       return res.json({ success: true, message: 'Đồng bộ tài sản chung thành công' });
-    } else if (PLATFORMS.includes(target)) {
+    } else if ((await getRecognizedFundAccountIds()).includes(target)) {
       // Calculate current platform balance
-      const orderRevenueAgg = await Order.aggregate([
-        { $match: { status: 'completed', source: target } },
-        { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
-      ]);
-      const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;
+      const completedOrders = await Order.find({ status: 'completed' })
+        .select('source total_price tracking_enabled payment_method shipping_carrier revenue_account')
+        .lean();
+      const revenueMap = await buildOrderRevenueMap(completedOrders);
+      const totalRevenue = revenueMap[target] || 0;
 
       const withdrawnAgg = await FundTransaction.aggregate([
         { $match: { type: 'revenue_withdrawal', source: target } },
@@ -360,15 +369,13 @@ exports.deleteAllTransactions = async (req, res) => {
     // Vì số dư khả dụng của nền tảng = tổng doanh thu (Order) - rút - điều chỉnh.
     // Xoá lịch sử làm rút/điều chỉnh = 0 -> số dư nền tảng sẽ bị đội lên bằng tổng doanh thu từ trước đến nay.
     // Để reset số dư nền tảng về 0, ta cần chèn 1 giao dịch điều chỉnh âm đúng bằng tổng doanh thu.
-    const orderRevenueAgg = await Order.aggregate([
-      { $match: { status: 'completed' } },
-      { $group: { _id: '$source', totalRevenue: { $sum: '$total_price' } } }
-    ]);
+    const completedOrders = await Order.find({ status: 'completed' })
+      .select('source total_price tracking_enabled payment_method shipping_carrier revenue_account')
+      .lean();
+    const revenueMap = await buildOrderRevenueMap(completedOrders);
 
     const adjustmentTransactions = [];
-    orderRevenueAgg.forEach(item => {
-      const source = item._id || 'khác';
-      const totalRevenue = item.totalRevenue;
+    Object.entries(revenueMap).forEach(([source, totalRevenue]) => {
       
       if (totalRevenue > 0) {
         adjustmentTransactions.push({

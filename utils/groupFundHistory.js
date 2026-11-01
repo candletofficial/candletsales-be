@@ -57,7 +57,35 @@ function groupFundHistory(transactions) {
     }
   }
 
+  // A completed Facebook/Instagram/POS transfer order writes two ledger rows:
+  // order revenue on the channel and the immediate automatic collection into
+  // the common fund. Present that pair as one business event.
+  const collectedRevenue = new Map();
+  const orderRevenues = transactions.filter(transaction => transaction.type === 'order_revenue' && transaction.order_id);
+  const autoCollections = transactions.filter(transaction => transaction.type === 'revenue_withdrawal'
+    && transaction.order_id
+    && /^Tự động chuyển doanh thu /i.test(transaction.note || '')
+    && !consumed.has(idOf(transaction)));
+  for (const revenue of orderRevenues) {
+    const matches = autoCollections.filter(collection => !consumed.has(idOf(collection))
+      && idOf(collection.order_id) === idOf(revenue.order_id)
+      && Number(collection.amount) === Number(revenue.amount));
+    if (matches.length === 1) {
+      collectedRevenue.set(idOf(revenue), matches[0]);
+      consumed.add(idOf(matches[0]));
+    }
+  }
+
   return transactions.filter(transaction => !consumed.has(idOf(transaction))).map(transaction => {
+    const collection = collectedRevenue.get(idOf(transaction));
+    if (collection) {
+      return {
+        ...transaction,
+        fund_change: Number(collection.fund_change || collection.amount || 0),
+        note: `${transaction.note || `Doanh thu đơn hàng`} · Đã chuyển vào tài sản chung`,
+        collected_to_common_fund: true,
+      };
+    }
     const withdrawal = paired.get(idOf(transaction));
     if (!withdrawal) return transaction;
     const oldDefaultNote = `Nạp tiền quảng cáo ${transaction.source} từ tài sản riêng`;

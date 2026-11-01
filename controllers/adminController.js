@@ -7,6 +7,7 @@ const InventoryCheck = require('../models/InventoryCheck');
 const FundTransaction = require('../models/FundTransaction');
 const AffiliateFee = require('../models/AffiliateFee');
 const { filterOrphanOrderRevenue } = require('../utils/filterOrphanOrderRevenue');
+const { groupFundHistory } = require('../utils/groupFundHistory');
 
 // @desc    Lấy danh sách tài khoản (hỗ trợ filter status, role, tìm kiếm)
 // @route   GET /api/admin/users
@@ -298,16 +299,24 @@ exports.getDashboardStats = async (req, res) => {
       Order.find({}).sort({ ordered_at: -1 }).limit(15),
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
       InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
-      FundTransaction.find({}).sort({ createdAt: -1 }).limit(5),
+      FundTransaction.find({}).sort({ createdAt: -1 }).limit(10).lean(),
       AffiliateFee.find({})
     ]);
-    const visibleFundTransactions = await filterOrphanOrderRevenue(recentFundTransactions);
+    const visibleFundTransactions = groupFundHistory(await filterOrphanOrderRevenue(recentFundTransactions));
 
-    // 1. Calculate main metrics
-    const activeCurrent = ordersCurrent.filter(o => o.status !== 'returned');
-    const returnedCurrent = ordersCurrent.filter(o => o.status === 'returned');
-    const activePrev = ordersPrev.filter(o => o.status !== 'returned');
-    const returnedPrev = ordersPrev.filter(o => o.status === 'returned');
+    // 1. Calculate main metrics. Keep this definition aligned with OrderManagement.
+    const isActiveRevenueOrder = o => (
+      o.status !== 'returned'
+      && o.status !== 'cancelled'
+      && o.delivery_status !== 'failed'
+      && o.delivery_status !== 'cancelled'
+    );
+    const isReturnedOrder = o => o.status === 'returned' || o.delivery_status === 'failed';
+
+    const activeCurrent = ordersCurrent.filter(isActiveRevenueOrder);
+    const returnedCurrent = ordersCurrent.filter(isReturnedOrder);
+    const activePrev = ordersPrev.filter(isActiveRevenueOrder);
+    const returnedPrev = ordersPrev.filter(isReturnedOrder);
 
     const revCurrent = activeCurrent.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
     const revPrev = activePrev.reduce((sum, o) => sum + ((o.is_replacement || o.is_seeding) ? 0 : (o.total_price || 0)), 0);
@@ -407,7 +416,7 @@ exports.getDashboardStats = async (req, res) => {
     ordersCurrent.forEach(o => {
       const dateKey = getLocalDateString(new Date(o.ordered_at));
       if (chartDataMap[dateKey]) {
-        if (o.status !== 'returned') {
+        if (isActiveRevenueOrder(o)) {
           if (!o.is_replacement && !o.is_seeding) {
             chartDataMap[dateKey].revenue += (o.total_price || 0);
           }
@@ -415,7 +424,7 @@ exports.getDashboardStats = async (req, res) => {
           const logistics = (o.logistics_cost || 0);
           chartDataMap[dateKey].cogs += cogs;
           chartDataMap[dateKey].cost += cogs + logistics + (o.seeding_cost || 0);
-        } else {
+        } else if (isReturnedOrder(o)) {
           chartDataMap[dateKey].cost += (o.return_cost || 0);
         }
       }
@@ -455,14 +464,14 @@ exports.getDashboardStats = async (req, res) => {
       if (!platformMap[src]) {
         platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0, affiliate_fee: 0 };
       }
-      if (o.status !== 'returned') {
+      if (isActiveRevenueOrder(o)) {
         if (!o.is_replacement && !o.is_seeding) {
           platformMap[src].orders += 1;
           platformMap[src].revenue += (o.total_price || 0);
         } else if (o.is_replacement) {
           platformMap[src].replacements += 1;
         }
-      } else {
+      } else if (isReturnedOrder(o)) {
         platformMap[src].returned += 1;
       }
     });
@@ -709,9 +718,9 @@ exports.getRecentActivities = async (req, res) => {
       Order.find({}).sort({ ordered_at: -1 }).limit(15),
       ImportTicket.find({ status: 'completed' }).sort({ completed_at: -1 }).limit(3),
       InventoryCheck.find({}).sort({ createdAt: -1 }).limit(3),
-      FundTransaction.find({}).sort({ createdAt: -1 }).limit(5)
+      FundTransaction.find({}).sort({ createdAt: -1 }).limit(10).lean()
     ]);
-    const visibleFundTransactions = await filterOrphanOrderRevenue(recentFundTransactions);
+    const visibleFundTransactions = groupFundHistory(await filterOrphanOrderRevenue(recentFundTransactions));
 
     const recentActivities = [];
     recentOrders.forEach(o => {

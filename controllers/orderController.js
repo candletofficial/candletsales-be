@@ -10,6 +10,20 @@ const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
 const { freeshipDiscount } = require('../utils/freeshipDiscount');
 const { itemMaterials, materialId, preserveOrderMaterials } = require('../utils/orderItemMaterials');
 const { newTrackingToken, trackingPath, trackingTransitionError } = require('../utils/orderTracking');
+const { BASE_FUND_ACCOUNTS, getEnabledCarrierIds, resolveOrderRevenueAccount } = require('../utils/carrierCodAccounts');
+
+const revenueAccountForOrder = async order => {
+  const snapshot = typeof order?.toObject === 'function' ? order.toObject() : { ...order };
+  return resolveOrderRevenueAccount({ ...snapshot, revenue_account: '' }, await getEnabledCarrierIds());
+};
+
+const shouldAutoCollectToCommonFund = (order, revenueAccount) => {
+  if (revenueAccount.startsWith('carrier_')) return false;
+  return revenueAccount === 'common'
+    || (order.source === 'pos' && order.payment_method === 'transfer');
+};
+
+const autoCollectionSource = (order, revenueAccount) => revenueAccount === 'common' ? 'common' : order.source;
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -431,18 +445,22 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    // Tự động chuyển doanh thu POS (Chuyển khoản), Facebook, Instagram vào Tài sản chung
-    const isAutoFund = (order.source === 'pos' && order.payment_method === 'transfer') || order.source === 'facebook' || order.source === 'instagram';
-    if (isAutoFund && order.total_price > 0 && (!order.tracking_enabled || order.status === 'completed')) {
-      const sourceName = order.source === 'pos' ? 'POS Chuyển khoản' : (order.source === 'facebook' ? 'Facebook' : 'Instagram');
+    const revenueAccount = order.status === 'completed' ? await revenueAccountForOrder(order) : null;
+    if (revenueAccount) {
+      order.revenue_account = revenueAccount;
+      await order.save();
+    }
+
+    const isAutoFund = shouldAutoCollectToCommonFund(order, revenueAccount);
+    if (isAutoFund && order.total_price > 0) {
       await FundTransaction.create({
         type: 'revenue_withdrawal',
         amount: order.total_price,
         fee: 0,
         fund_change: order.total_price,
-        source: order.source,
+        source: autoCollectionSource(order, revenueAccount),
         order_id: order._id,
-        note: `Tự động chuyển doanh thu ${sourceName} đơn ${order.orderId}`,
+        note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
         created_by: 'System'
       });
     }
@@ -454,7 +472,7 @@ exports.createOrder = async (req, res, next) => {
         amount: order.total_price,
         fund_change: 0,
         platform_change: order.total_price,
-        source: order.source,
+        source: revenueAccount,
         order_id: order._id,
         note: `Doanh thu đơn hàng ${order.orderId}`,
         created_by: req.user?.username || 'System'
@@ -556,16 +574,15 @@ exports.updateOrder = async (req, res, next) => {
           
           // Tạo giao dịch phí hoàn mới nếu > 0
           if (newReturnCost > 0) {
-            const orderSource = oldOrder.source || 'khác';
-            const platformsWithFund = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
+            const returnFundAccount = await revenueAccountForOrder(oldOrder);
 
-            if (platformsWithFund.includes(orderSource)) {
+            if (returnFundAccount.startsWith('carrier_') || BASE_FUND_ACCOUNTS.includes(returnFundAccount)) {
               await FundTransaction.create({
                 type: 'revenue_withdrawal',
                 amount: newReturnCost,
                 fee: 0,
                 fund_change: 0,
-                source: orderSource,
+                source: returnFundAccount,
                 order_id: oldOrder._id,
                 note: `Phí hoàn đơn hàng ${oldOrder.orderId} (từ tài sản riêng)`,
                 created_by: 'System'
@@ -883,20 +900,26 @@ exports.updateOrder = async (req, res, next) => {
       await existingShipTx.deleteOne(); // Xóa nếu phí ship về 0
     }
 
-    // Xử lý FundTransaction tự động chuyển doanh thu (POS Chuyển khoản, Facebook, Instagram)
-    const isAutoFund = (order.source === 'pos' && order.payment_method === 'transfer') || order.source === 'facebook' || order.source === 'instagram';
-    const autoFundSources = ['pos', 'facebook', 'instagram'];
-    const existingAutoTxList = await FundTransaction.find({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: autoFundSources } });
+    // Giữ quy tắc thu quỹ cũ; riêng Facebook COD có tài khoản hãng vận chuyển thì không tự thu về quỹ chung.
+    const revenueAccount = await revenueAccountForOrder(order);
+    if (order.status === 'completed' && order.revenue_account !== revenueAccount) {
+      order.revenue_account = revenueAccount;
+      await order.save();
+    }
+    const isAutoFund = shouldAutoCollectToCommonFund(order, revenueAccount);
+    const existingAutoTxList = await FundTransaction.find({
+      order_id: order._id,
+      type: 'revenue_withdrawal',
+      note: /^Tự động chuyển doanh thu /,
+    });
     
     if (isAutoFund && order.total_price > 0 && (!order.tracking_enabled || order.status === 'completed')) {
-      const sourceName = order.source === 'pos' ? 'POS Chuyển khoản' : (order.source === 'facebook' ? 'Facebook' : 'Instagram');
-      
       if (existingAutoTxList.length > 0) {
         const txToUpdate = existingAutoTxList[0];
         txToUpdate.amount = order.total_price;
         txToUpdate.fund_change = order.total_price;
-        txToUpdate.source = order.source;
-        txToUpdate.note = `Tự động chuyển doanh thu ${sourceName} đơn ${order.orderId}`;
+        txToUpdate.source = autoCollectionSource(order, revenueAccount);
+        txToUpdate.note = `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`;
         await txToUpdate.save();
         
         // Xoá các tx thừa nếu có (do lỗi cũ)
@@ -909,9 +932,9 @@ exports.updateOrder = async (req, res, next) => {
           amount: order.total_price,
           fee: 0,
           fund_change: order.total_price,
-          source: order.source,
+          source: autoCollectionSource(order, revenueAccount),
           order_id: order._id,
-          note: `Tự động chuyển doanh thu ${sourceName} đơn ${order.orderId}`,
+          note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
           created_by: 'System'
         });
       }
@@ -928,7 +951,7 @@ exports.updateOrder = async (req, res, next) => {
         if (existingRevTx) {
           existingRevTx.amount = order.total_price;
           existingRevTx.platform_change = order.total_price;
-          existingRevTx.source = order.source;
+          existingRevTx.source = revenueAccount;
           await existingRevTx.save();
         } else {
           await FundTransaction.create({
@@ -936,7 +959,7 @@ exports.updateOrder = async (req, res, next) => {
             amount: order.total_price,
             fund_change: 0,
             platform_change: order.total_price,
-            source: order.source,
+            source: revenueAccount,
             order_id: order._id,
             note: `Doanh thu đơn hàng ${order.orderId}`,
             created_by: req.user?.username || 'System'
@@ -977,7 +1000,7 @@ exports.deleteOrder = async (req, res, next) => {
         order_id: order._id,
         $or: [
           { type: { $in: ['order_revenue', 'seeding_payment', 'shipping_payment'] } },
-          { type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } },
+          { type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
         ],
       }, { session });
 
@@ -1062,7 +1085,11 @@ exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
   }
 
   // Xóa giao dịch tự động chuyển doanh thu nếu có (vì đơn đã bị hoàn)
-  await FundTransaction.deleteMany({ order_id: order._id, type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } });
+  await FundTransaction.deleteMany({
+    order_id: order._id,
+    type: 'revenue_withdrawal',
+    note: /^Tự động chuyển doanh thu /,
+  });
 
   // Cập nhật trạng thái đơn hàng
   const updatedOrder = await Order.findByIdAndUpdate(
@@ -1077,10 +1104,9 @@ exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
 
   // Xử lý trừ phí hoàn vào tài sản (nếu có phí hoàn)
   if (returnCost > 0) {
-    const orderSource = updatedOrder.source || 'khác';
-    const platformsWithFund = ['pos', 'shopee', 'tiktok', 'youtube', 'website', 'khác'];
+    const returnFundAccount = await revenueAccountForOrder(updatedOrder);
 
-    if (platformsWithFund.includes(orderSource)) {
+    if (returnFundAccount.startsWith('carrier_') || BASE_FUND_ACCOUNTS.includes(returnFundAccount)) {
       // Trừ vào tài sản riêng của nền tảng (sử dụng revenue_withdrawal với fund_change = 0)
       // Chấp nhận trừ âm nếu tài sản riêng không đủ
       await FundTransaction.create({
@@ -1088,7 +1114,7 @@ exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
         amount: returnCost,
         fee: 0,
         fund_change: 0,
-        source: orderSource,
+        source: returnFundAccount,
         order_id: updatedOrder._id,
         note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản riêng)`,
         created_by: 'System'
@@ -1279,18 +1305,25 @@ exports.updateDeliveryStatus = async (req, res, next) => {
     if (newStatus === 'delivered') {
       order.delivery_status = 'delivered';
       order.status = 'completed';
+      order.revenue_account = await revenueAccountForOrder(order);
       await order.save();
 
       // Ghi nhận doanh thu nền tảng nếu chưa có
       if (order.total_price > 0) {
+        const revenueAccount = await revenueAccountForOrder(order);
         const existingRevTx = await FundTransaction.findOne({ order_id: order._id, type: 'order_revenue' });
-        if (!existingRevTx) {
+        if (existingRevTx) {
+          existingRevTx.amount = order.total_price;
+          existingRevTx.platform_change = order.total_price;
+          existingRevTx.source = revenueAccount;
+          await existingRevTx.save();
+        } else {
           await FundTransaction.create({
             type: 'order_revenue',
             amount: order.total_price,
             fund_change: 0,
             platform_change: order.total_price,
-            source: order.source,
+            source: revenueAccount,
             order_id: order._id,
             note: `Doanh thu đơn hàng ${order.orderId} (Giao thành công)`,
             created_by: req.user?.username || 'Admin'
@@ -1298,15 +1331,19 @@ exports.updateDeliveryStatus = async (req, res, next) => {
         }
       }
 
-      // Tracked manual orders defer automatic collection until delivery succeeds.
-      const collectToFund = order.tracking_enabled && order.total_price > 0 &&
-        ((order.source === 'pos' && order.payment_method === 'transfer') || ['facebook', 'instagram'].includes(order.source));
+      // Đơn theo dõi vận chuyển chỉ ghi tiền sau khi giao thành công.
+      const revenueAccount = await revenueAccountForOrder(order);
+      const collectToFund = shouldAutoCollectToCommonFund(order, revenueAccount) && order.total_price > 0;
       if (collectToFund) {
-        const existingCollection = await FundTransaction.findOne({ order_id: order._id, type: 'revenue_withdrawal' });
+        const existingCollection = await FundTransaction.findOne({
+          order_id: order._id,
+          type: 'revenue_withdrawal',
+          note: /^Tự động chuyển doanh thu /,
+        });
         if (!existingCollection) await FundTransaction.create({
           type: 'revenue_withdrawal', amount: order.total_price, fee: 0,
-          fund_change: order.total_price, source: order.source, order_id: order._id,
-          note: `Tự động chuyển doanh thu ${order.source} đơn ${order.orderId}`,
+          fund_change: order.total_price, source: autoCollectionSource(order, revenueAccount), order_id: order._id,
+          note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
           created_by: req.user?.username || 'Admin',
         });
       }

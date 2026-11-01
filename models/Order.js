@@ -60,7 +60,7 @@ const orderSchema = new mongoose.Schema({
   total_excludes_logistics: { type: Boolean, default: undefined },
   source: { 
     type: String, 
-    enum: ['pos', 'shopee', 'tiktok', 'instagram', 'facebook', 'youtube', 'website', 'khác'], 
+    enum: ['pos', 'shopee', 'tiktok', 'instagram', 'facebook', 'website', 'khác'],
     default: 'khác' 
   },
   pos_mode: {
@@ -96,6 +96,9 @@ const orderSchema = new mongoose.Schema({
     default: 'standard'
   },
   shipping_carrier: { type: String, default: '' },
+  // Quỹ nhận doanh thu sau khi đơn hoàn thành. Lưu riêng để việc đổi cấu hình
+  // tài khoản COD sau này không làm dịch chuyển doanh thu lịch sử.
+  revenue_account: { type: String, default: '' },
   tracking_number: { type: String, default: '' },
   tracking_url: { type: String, default: '' },
   shipping_fee: { type: Number, default: 0 },

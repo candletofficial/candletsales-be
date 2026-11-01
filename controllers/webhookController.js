@@ -1,9 +1,56 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Material = require('../models/Material');
+const FundTransaction = require('../models/FundTransaction');
 const { buildMaterialDeductions } = require('./orderController');
 const { classifyPancakeStatus } = require('../utils/pancakeOrderStatus');
 const { applyPancakeCustomerDetails } = require('../utils/pancakeCustomerDetails');
+const { getEnabledCarrierIds, resolveOrderRevenueAccount } = require('../utils/carrierCodAccounts');
+
+const revenueAccountForOrder = async order => {
+  const snapshot = typeof order?.toObject === 'function' ? order.toObject() : { ...order };
+  return resolveOrderRevenueAccount({ ...snapshot, revenue_account: '' }, await getEnabledCarrierIds());
+};
+
+const syncCompletedOrderRevenue = async (order, amount) => {
+  const revenueAmount = Number(amount || order.total_price || 0);
+  if (revenueAmount <= 0) return;
+  const revenueAccount = await revenueAccountForOrder(order);
+  order.revenue_account = revenueAccount;
+
+  await FundTransaction.findOneAndUpdate(
+    { order_id: order._id, type: 'order_revenue' },
+    {
+      amount: revenueAmount,
+      fund_change: 0,
+      platform_change: revenueAmount,
+      source: revenueAccount,
+      order_id: order._id,
+      note: `Doanh thu đơn hàng ${order.orderId}`,
+      created_by: 'System',
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  const collectionFilter = { order_id: order._id, type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / };
+  if (revenueAccount === 'common') {
+    await FundTransaction.findOneAndUpdate(
+      collectionFilter,
+      {
+        amount: revenueAmount,
+        fee: 0,
+        fund_change: revenueAmount,
+        source: 'common',
+        order_id: order._id,
+        note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
+        created_by: 'System',
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  } else {
+    await FundTransaction.deleteMany(collectionFilter);
+  }
+};
 
 // Helper to generate a random order ID
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -99,7 +146,6 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       
       if (isCancelled) {
         console.log(`Order ${payload.id} is cancelled on Pancake. Keeping order and refunding materials...`);
-        const FundTransaction = require('../models/FundTransaction');
         const order = existingOrder;
         
         if (order) {
@@ -143,8 +189,6 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         existingOrder.status = 'completed';
         updated = true;
 
-        const FundTransaction = require('../models/FundTransaction');
-        
         // Calculate new amount for transaction log
         // Với đơn marketplace (Shopee, TikTok,...): "Tiền cần thu" = (Tổng - Giảm giá) - Phí sàn
         // Với đơn trực tiếp (Facebook, offline): dùng cash/transfer/cod
@@ -159,16 +203,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         const newOrderAmount = calcOrderAmount(payload);
         const revenueAmount = newOrderAmount > 0 ? newOrderAmount : existingOrder.total_price;
 
-        await FundTransaction.create({
-          type: 'order_revenue',
-          amount: revenueAmount,
-          fund_change: 0,
-          platform_change: revenueAmount,
-          source: existingOrder.source,
-          order_id: existingOrder._id,
-          note: `Doanh thu đơn hàng ${existingOrder.orderId}`,
-          created_by: 'System'
-        });
+        await syncCompletedOrderRevenue(existingOrder, revenueAmount);
       }
       // NOTE: Không tự động hạ cấp đơn từ 'completed' xuống 'pending'
       // vì Pancake có thể gửi webhook nhiều lần với trạng thái khác nhau (ghi chú, địa chỉ, ...)
@@ -193,13 +228,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
 
         // Cập nhật lại số tiền trong FundTransaction nếu đơn đã ghi nhận doanh thu
         if (existingOrder.status === 'completed') {
-          const FundTransaction = require('../models/FundTransaction');
-          const existingRevTx = await FundTransaction.findOne({ order_id: existingOrder._id, type: 'order_revenue' });
-          if (existingRevTx) {
-            existingRevTx.amount = newOrderAmount;
-            existingRevTx.platform_change = newOrderAmount;
-            await existingRevTx.save();
-          }
+          await syncCompletedOrderRevenue(existingOrder, newOrderAmount);
         }
       }
 
@@ -539,6 +568,10 @@ exports.handlePancakeWebhook = async (req, res, next) => {
 
     applyPancakeCustomerDetails(order, payload);
     await order.save();
+    if (order.status === 'completed') {
+      await syncCompletedOrderRevenue(order, order.total_price);
+      await order.save();
+    }
     console.log(`Successfully saved Pancake order as: ${order.orderId}`);
 
     // Trigger auto confirm imports
