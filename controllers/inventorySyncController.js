@@ -6,8 +6,12 @@ exports.syncInventory = async (req, res) => {
   try {
     const { checked_by } = req.body;
     
-    // Tìm các nguyên liệu có stock != actualStock
-    const materials = await Material.find({ $expr: { $ne: ["$stock", "$actualStock"] } });
+    // actualStock của dữ liệu cũ có thể chưa tồn tại; khi đó xem như bằng stock.
+    const materials = await Material.find({
+      $expr: {
+        $ne: ['$stock', { $ifNull: ['$actualStock', '$stock'] }]
+      }
+    });
     
     if (materials.length === 0) {
       return res.status(400).json({ success: false, message: 'Không có nguyên liệu nào bị lệch kho' });
@@ -15,14 +19,15 @@ exports.syncInventory = async (req, res) => {
     
     let totalDiscrepancyValue = 0;
     const ticketItems = materials.map(m => {
-      const actualStock = m.actualStock !== null && m.actualStock !== undefined ? m.actualStock : m.stock;
-      const difference = actualStock - m.stock;
-      const price = m.price || 0;
+      const systemStock = Number(m.stock);
+      const actualStock = Number(m.actualStock ?? m.stock);
+      const price = Number(m.price) || 0;
+      const difference = actualStock - systemStock;
       totalDiscrepancyValue += difference * price;
       
       return {
         material_id: m._id,
-        system_stock: m.stock,
+        system_stock: systemStock,
         actual_stock: actualStock,
         difference: difference,
         price: price
@@ -41,7 +46,7 @@ exports.syncInventory = async (req, res) => {
     
     // Update materials (set stock = actualStock)
     const bulkOps = materials.map(m => {
-      const actualStock = m.actualStock !== null && m.actualStock !== undefined ? m.actualStock : m.stock;
+      const actualStock = Number(m.actualStock ?? m.stock);
       return {
         updateOne: {
           filter: { _id: m._id },
@@ -61,7 +66,12 @@ exports.syncInventory = async (req, res) => {
     });
   } catch (error) {
     console.error('Lỗi khi cân bằng kho:', error);
-    res.status(500).json({ success: false, message: 'Lỗi server' });
+    const message = error?.code === 11000
+      ? 'Mã phiếu cân bằng kho bị trùng, vui lòng thử lại'
+      : error?.name === 'ValidationError'
+        ? `Dữ liệu cân bằng kho không hợp lệ: ${Object.values(error.errors || {}).map(item => item.message).join(', ')}`
+        : 'Không thể cân bằng kho, vui lòng thử lại';
+    res.status(500).json({ success: false, message });
   }
 };
 

@@ -15,8 +15,7 @@ const inventoryCheckSchema = new mongoose.Schema({
       },
       system_stock: {
         type: Number,
-        required: true,
-        min: 0
+        required: true
       },
       actual_stock: {
         type: Number,

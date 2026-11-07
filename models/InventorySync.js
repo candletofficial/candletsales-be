@@ -15,13 +15,11 @@ const inventorySyncSchema = new mongoose.Schema({
       },
       system_stock: {
         type: Number,
-        required: true,
-        min: 0
+        required: true
       },
       actual_stock: {
         type: Number,
-        required: true,
-        min: 0
+        required: true
       },
       price: {
         type: Number,
@@ -52,18 +50,18 @@ const inventorySyncSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Auto-generate code before saving
+// Tạo mã theo số thứ tự lớn nhất để không bị trùng khi lịch sử từng bị xóa.
 inventorySyncSchema.pre('validate', async function (next) {
   if (!this.code) {
     const today = new Date();
     const dateStr = today.toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
-    const count = await mongoose.model('InventorySync').countDocuments({
-      createdAt: {
-        $gte: new Date(today.setHours(0, 0, 0, 0)),
-        $lt: new Date(today.setHours(23, 59, 59, 999))
-      }
-    });
-    this.code = `SYNC${dateStr}${(count + 1).toString().padStart(3, '0')}`;
+    const prefix = `SYNC${dateStr}`;
+    const latestSync = await mongoose.model('InventorySync')
+      .findOne({ code: new RegExp(`^${prefix}\\d+$`) }, { code: 1 })
+      .sort({ code: -1 })
+      .lean();
+    const latestSequence = Number(latestSync?.code?.slice(prefix.length)) || 0;
+    this.code = `${prefix}${String(latestSequence + 1).padStart(3, '0')}`;
   }
   next();
 });

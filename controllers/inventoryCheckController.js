@@ -25,12 +25,14 @@ exports.createTicket = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Tồn kho thực tế không hợp lệ' });
       }
 
-      // Record difference
-      const diff = actual_stock - material.actualStock;
+      // Chụp lại tồn hệ thống tại thời điểm kiểm. Không dùng actualStock vì
+      // trường này sẽ được cập nhật bằng chính số lượng vừa kiểm bên dưới.
+      const system_stock = Number(material.stock);
+      const diff = actual_stock - system_stock;
       
       ticketItems.push({
         material_id: material._id,
-        system_stock: material.actualStock,
+        system_stock,
         actual_stock: actual_stock,
         difference: diff,
         price: material.price || 0
