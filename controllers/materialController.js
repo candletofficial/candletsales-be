@@ -62,14 +62,25 @@ exports.createMaterial = async (req, res, next) => {
 exports.updateMaterial = async (req, res, next) => {
   try {
     const payload = { ...req.body };
+    const currentMaterial = await Material.findById(req.params.id);
+    if (!currentMaterial) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
+    }
+
+    if (payload.sku !== undefined) {
+      payload.sku = String(payload.sku).trim();
+      if (payload.sku === currentMaterial.sku) {
+        delete payload.sku;
+      } else {
+        const duplicatedSku = await Material.exists({ sku: payload.sku, _id: { $ne: currentMaterial._id } });
+        if (duplicatedSku) {
+          return res.status(400).json({ success: false, message: 'Mã SKU đã được dùng cho nguyên vật liệu khác' });
+        }
+      }
+    }
     
     // Nếu có cập nhật số lượng, actualStock hoặc minStock, cần tính lại trạng thái
     if (payload.stock !== undefined || payload.actualStock !== undefined || payload.minStock !== undefined) {
-      const currentMaterial = await Material.findById(req.params.id);
-      if (!currentMaterial) {
-        return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
-      }
-      
       // Nếu frontend gửi lên một stock mới, cập nhật actualStock bằng đúng với stock đó
       let updatedActualStock = currentMaterial.actualStock;
       if (payload.stock !== undefined && payload.stock !== currentMaterial.stock) {
@@ -92,6 +103,9 @@ exports.updateMaterial = async (req, res, next) => {
     }
     res.status(200).json({ success: true, data: material });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: 'Mã SKU đã được dùng cho nguyên vật liệu khác' });
+    }
     next(error);
   }
 };
