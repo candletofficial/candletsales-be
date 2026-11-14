@@ -57,6 +57,35 @@ exports.createProduct = async (req, res, next) => {
   }
 };
 
+exports.updateShopOrder = async (req, res, next) => {
+  try {
+    const orderedProductIds = Array.isArray(req.body.orderedProductIds)
+      ? req.body.orderedProductIds.map(String)
+      : [];
+    const uniqueIds = [...new Set(orderedProductIds)];
+
+    if (!uniqueIds.length || uniqueIds.length !== orderedProductIds.length) {
+      return res.status(400).json({ success: false, message: 'Danh sách sắp xếp sản phẩm không hợp lệ' });
+    }
+
+    const existingCount = await Product.countDocuments({ _id: { $in: uniqueIds } });
+    if (existingCount !== uniqueIds.length) {
+      return res.status(400).json({ success: false, message: 'Có sản phẩm không còn tồn tại trong danh sách' });
+    }
+
+    await Product.bulkWrite(uniqueIds.map((id, index) => ({
+      updateOne: {
+        filter: { _id: id },
+        update: { $set: { shop_order: index + 1 } },
+      },
+    })));
+
+    res.status(200).json({ success: true, message: 'Đã cập nhật thứ tự sản phẩm' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.updateProduct = async (req, res, next) => {
   try {
     const existing = await Product.findById(req.params.id);

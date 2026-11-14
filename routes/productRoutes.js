@@ -8,6 +8,7 @@ const { protect, adminOnly } = require('../middlewares/authMiddleware');
 router.use(protect, adminOnly);
 router.get('/', productController.getProducts);
 router.post('/', productController.createProduct);
+router.put('/shop-order', productController.updateShopOrder);
 router.put('/:id', productController.updateProduct);
 router.delete('/:id', productController.deleteProduct);
 

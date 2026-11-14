@@ -36,6 +36,19 @@ exports.getShopProducts = async (req, res, next) => {
       return obj;
     });
 
+    const outOfStock = (product) => product.stock !== null
+      && product.stock !== undefined
+      && Number(product.stock) <= 0;
+    result.sort((a, b) => {
+      const stockDifference = Number(outOfStock(a)) - Number(outOfStock(b));
+      if (stockDifference) return stockDifference;
+
+      const orderA = Number(a.shop_order) > 0 ? Number(a.shop_order) : Number.POSITIVE_INFINITY;
+      const orderB = Number(b.shop_order) > 0 ? Number(b.shop_order) : Number.POSITIVE_INFINITY;
+      if (orderA !== orderB) return orderA - orderB;
+      return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    });
+
     res.status(200).json({ success: true, data: result });
   } catch (error) {
     next(error);

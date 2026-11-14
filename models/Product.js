@@ -10,6 +10,7 @@ const productSchema = new mongoose.Schema({
   original_price: { type: Number, default: 0 },
   tag: { type: String, default: '' },
   tag_color: { type: String, default: '' },
+  shop_order: { type: Number, default: null, min: 1 },
   
   // Filtering fields
   scent_group: { type: String, default: null },
