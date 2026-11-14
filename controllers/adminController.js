@@ -256,30 +256,53 @@ exports.getUserStats = async (req, res) => {
 // @route   GET /api/admin/dashboard
 // @access  Private/Admin
 
-const getLocalDateString = (dateObj) => {
-  const y = dateObj.getFullYear();
-  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const d = String(dateObj.getDate()).padStart(2, '0');
+const DAY_MS = 24 * 60 * 60 * 1000;
+const VIETNAM_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+// Việt Nam không áp dụng giờ mùa hè. Dịch timestamp thêm UTC+7 rồi dùng UTC getters
+// giúp kết quả ổn định dù tiến trình Node đang chạy ở múi giờ nào.
+const getVietnamDateString = (dateObj) => {
+  const vietnamTime = new Date(dateObj.getTime() + VIETNAM_OFFSET_MS);
+  const y = vietnamTime.getUTCFullYear();
+  const m = String(vietnamTime.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(vietnamTime.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const parseDateKey = (dateKey) => {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const calendarDate = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return getVietnamDateString(new Date(calendarDate.getTime() - VIETNAM_OFFSET_MS)) === dateKey
+    ? calendarDate
+    : null;
+};
+
+const calendarDateKey = (calendarDate) => {
+  const y = calendarDate.getUTCFullYear();
+  const m = String(calendarDate.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(calendarDate.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 };
 
 exports.getDashboardStats = async (req, res) => {
   try {
     const days = Math.max(1, parseInt(req.query.days) || 30);
-    const endDateParam = req.query.endDate;
-    
-    let baseDate = new Date();
-    if (endDateParam) {
-      baseDate = new Date(endDateParam);
+    const requestedEndDate = req.query.endDate;
+    const endCalendarDate = requestedEndDate
+      ? parseDateKey(requestedEndDate)
+      : parseDateKey(getVietnamDateString(new Date()));
+    if (!endCalendarDate) {
+      return res.status(400).json({ success: false, message: 'Ngày kết thúc không hợp lệ' });
     }
-    
-    // Ngày kết thúc 23:59:59
-    const endOfPeriod = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 23, 59, 59, 999);
-    // X ngày gần nhất (từ 00:00 của X-1 ngày trước)
-    const startOfCurrentPeriod = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() - (days - 1), 0, 0, 0, 0);
-    // X ngày trước đó
+
+    const startCalendarDate = new Date(endCalendarDate.getTime() - ((days - 1) * DAY_MS));
+    const startOfCurrentPeriod = new Date(startCalendarDate.getTime() - VIETNAM_OFFSET_MS);
+    const endOfPeriod = new Date(endCalendarDate.getTime() + DAY_MS - VIETNAM_OFFSET_MS - 1);
     const endOfPrevPeriod = new Date(startOfCurrentPeriod.getTime() - 1);
-    const startOfPrevPeriod = new Date(endOfPrevPeriod.getFullYear(), endOfPrevPeriod.getMonth(), endOfPrevPeriod.getDate() - (days - 1), 0, 0, 0, 0);
+    const startPrevCalendarDate = new Date(startCalendarDate.getTime() - (days * DAY_MS));
+    const endPrevCalendarDate = new Date(startCalendarDate.getTime() - DAY_MS);
+    const startOfPrevPeriod = new Date(startPrevCalendarDate.getTime() - VIETNAM_OFFSET_MS);
 
     const [
       ordersCurrent, ordersPrev,
@@ -333,17 +356,17 @@ exports.getDashboardStats = async (req, res) => {
     const adCostGrowth = adPrevTotal === 0 ? null : ((adCurrentTotal - adPrevTotal) / adPrevTotal * 100);
 
     // Calculate exact affiliate fee for a date range
-    const calculateExactAffiliateFee = (start, end) => {
+    const calculateExactAffiliateFee = (startCalendar, endCalendar) => {
       let totalFee = 0;
       const platformFees = {};
       
-      let iter = new Date(start);
+      let iter = new Date(startCalendar);
       // to avoid infinite loop on edge cases, limit to reasonable days
       let safeGuard = 0;
-      while (iter <= end && safeGuard < 5000) {
-        const m = iter.getMonth() + 1;
-        const y = iter.getFullYear();
-        const daysInMonth = new Date(y, m, 0).getDate();
+      while (iter <= endCalendar && safeGuard < 5000) {
+        const m = iter.getUTCMonth() + 1;
+        const y = iter.getUTCFullYear();
+        const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
         
         const monthlyFees = affiliateFees.filter(f => f.month === m && f.year === y);
         monthlyFees.forEach(f => {
@@ -353,16 +376,16 @@ exports.getDashboardStats = async (req, res) => {
            platformFees[plat] = (platformFees[plat] || 0) + dailyAmount;
         });
         
-        iter.setDate(iter.getDate() + 1);
+        iter.setUTCDate(iter.getUTCDate() + 1);
         safeGuard++;
       }
       return { totalFee, platformFees };
     };
 
-    const currentAffiliateData = calculateExactAffiliateFee(startOfCurrentPeriod, endOfPeriod);
+    const currentAffiliateData = calculateExactAffiliateFee(startCalendarDate, endCalendarDate);
     const affiliateFeeCurrentTotal = currentAffiliateData.totalFee;
     
-    const prevAffiliateData = calculateExactAffiliateFee(startOfPrevPeriod, endOfPrevPeriod);
+    const prevAffiliateData = calculateExactAffiliateFee(startPrevCalendarDate, endPrevCalendarDate);
     const affiliateFeePrevTotal = prevAffiliateData.totalFee;
 
     const normalCompletedCurrent = activeCurrent.filter(o => !o.is_replacement && !o.is_seeding);
@@ -406,15 +429,15 @@ exports.getDashboardStats = async (req, res) => {
     // 2. Chart data (X days)
     const chartDataMap = {};
     for (let i = 0; i < days; i++) {
-      const d = new Date(startOfCurrentPeriod);
-      d.setDate(d.getDate() + i);
-      const dayStr = d.toLocaleDateString('vi-VN', { month: '2-digit', day: '2-digit' }); // "24/10"
-      chartDataMap[getLocalDateString(d)] = { date: dayStr, revenue: 0, cost: 0, cogs: 0 };
+      const calendarDate = new Date(startCalendarDate.getTime() + (i * DAY_MS));
+      const dateKey = calendarDateKey(calendarDate);
+      const dayStr = `${dateKey.slice(8, 10)}/${dateKey.slice(5, 7)}`;
+      chartDataMap[dateKey] = { date: dayStr, revenue: 0, cost: 0, cogs: 0 };
     }
 
     // Accumulate revenue, COGS and Logistics
     ordersCurrent.forEach(o => {
-      const dateKey = getLocalDateString(new Date(o.ordered_at));
+      const dateKey = getVietnamDateString(new Date(o.ordered_at));
       if (chartDataMap[dateKey]) {
         if (isActiveRevenueOrder(o)) {
           if (!o.is_replacement && !o.is_seeding) {
@@ -432,7 +455,7 @@ exports.getDashboardStats = async (req, res) => {
 
     // Accumulate Ad Costs (and leave affiliate fee for overall total, not daily charts since it's monthly)
     adsCurrent.forEach(a => {
-      const dateKey = getLocalDateString(new Date(a.date));
+      const dateKey = getVietnamDateString(new Date(a.date));
       if (chartDataMap[dateKey]) {
         chartDataMap[dateKey].cost += a.amount;
       }
