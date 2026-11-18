@@ -140,7 +140,7 @@ const referralFrom = (event) => {
 const resolveCart = async (requestedCart) => {
   if (!Array.isArray(requestedCart) || requestedCart.length === 0) return [];
   const ids = [...new Set(requestedCart.map((item) => item.product_id).filter(Boolean))];
-  const products = await Product.find({ _id: { $in: ids } }).lean();
+  const products = await Product.find({ _id: { $in: ids }, product_type: { $ne: 'sub_formula' } }).lean();
   const byId = new Map(products.map((product) => [String(product._id), product]));
   const result = [];
 

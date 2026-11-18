@@ -9,7 +9,7 @@ exports.createTrackingLink = async (req, res, next) => {
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
     if (order.pancake_order_id) return res.status(400).json({ success: false, message: 'Tính năng này dành cho đơn tạo thủ công.' });
     if (!order.tracking_token) {
-      if (['returned', 'cancelled'].includes(order.status) || ['failed', 'cancelled'].includes(order.delivery_status)) {
+      if (['returned', 'cancelled'].includes(order.status) || ['returning', 'returned', 'failed', 'cancelled'].includes(order.delivery_status)) {
         return res.status(400).json({ success: false, message: 'Đơn đã hoàn hoặc huỷ không thể bắt đầu lại tiến trình giao hàng. Hãy tạo đơn mới.' });
       }
       session = await Order.startSession();

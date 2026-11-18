@@ -145,6 +145,7 @@ exports.receivePayment = async (req, res) => {
       payment_method: 'transfer',
       payment_status: 'pending',
       status: { $nin: ['cancelled', 'returned'] },
+      delivery_status: { $nin: ['returning', 'returned', 'failed', 'cancelled'] },
     });
     if (!order) {
       // Recovery for the tiny window where the order was saved but the audit

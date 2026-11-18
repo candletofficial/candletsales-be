@@ -58,6 +58,11 @@ const buildMaterialDeductions = async (items, shippingMethod = 'standard', sessi
 
   for (const item of items) {
     const product = productMap[materialId(item.product_id)];
+    if (product?.product_type === 'sub_formula') {
+      const error = new Error('Sản phẩm không tồn tại hoặc không thể đăng bán.');
+      error.statusCode = 400;
+      throw error;
+    }
 
     const qty = item.quantity; // số lượng sản phẩm trong đơn
 
@@ -312,7 +317,7 @@ exports.createOrder = async (req, res, next) => {
           return res.status(400).json({ success: false, message: 'Mã freeship áp dụng cho đơn website có phí vận chuyển.' });
         }
         if (!req.internalPaymentConfirmation) {
-          const products = await Product.find({ _id: { $in: items.map(item => item.product_id) } });
+          const products = await Product.find({ _id: { $in: items.map(item => item.product_id) }, product_type: { $ne: 'sub_formula' } });
           items = items.map(item => {
             const product = products.find(p => String(p._id) === String(item.product_id));
             const sku = product?.skus?.find(s => s.id === item.sku_id);
@@ -818,12 +823,12 @@ exports.updateOrder = async (req, res, next) => {
       } else if (delivery_status === 'delivered') {
         updateData.status = 'completed';
       } else if (delivery_status === 'failed' && oldOrder.delivery_status !== 'failed') {
-        updateData.status = 'returned';
-        try {
-          await exports.processReturnOrder(oldOrder._id, req.body.return_cost || 0);
-        } catch (err) {
-          console.error('[updateOrder] Lỗi xử lý hoàn hàng khi giao thất bại:', err.message);
-        }
+        const { updatedOrder } = await exports.processReturnOrder(oldOrder._id, req.body.return_cost || 0);
+        return res.status(200).json({
+          success: true,
+          data: updatedOrder,
+          message: 'Đã hoàn hàng, hoàn kho và cập nhật doanh thu.',
+        });
       }
       updateData.delivery_status = delivery_status;
       if (oldOrder.tracking_enabled && ['pending', 'confirmed', 'shipping'].includes(delivery_status)) updateData.status = 'pending';
@@ -1030,110 +1035,129 @@ exports.deleteOrder = async (req, res, next) => {
   } finally { if (session) await session.endSession(); }
 };
 
+exports.markOrderReturning = async (orderId) => {
+  const session = await Order.startSession();
+  let updatedOrder;
+  try {
+    await session.withTransaction(async () => {
+      const order = await Order.findById(orderId).session(session);
+      if (!order) throw new Error('Không tìm thấy đơn hàng');
+      if (['returned', 'cancelled'].includes(order.status)
+        || ['returned', 'cancelled'].includes(order.delivery_status)) {
+        updatedOrder = order;
+        return;
+      }
+
+      await FundTransaction.deleteMany({
+        order_id: order._id,
+        $or: [
+          { type: 'order_revenue' },
+          { type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
+        ],
+      }, { session });
+      order.delivery_status = 'returning';
+      await order.save({ session });
+      updatedOrder = order;
+    });
+    return updatedOrder;
+  } finally {
+    await session.endSession();
+  }
+};
+
 exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
   const SystemConfig = require('../models/SystemConfig');
   const FundTransaction = require('../models/FundTransaction');
+  const Coupon = require('../models/Coupon');
+  const session = await Order.startSession();
+  let result;
 
-  const order = await Order.findById(orderId);
-  if (!order) {
-    throw new Error('Không tìm thấy đơn hàng');
-  }
-
-  if (order.status === 'returned') {
-    throw new Error('Đơn hàng này đã được đánh dấu bị hoàn trước đó');
-  }
-
-  // Đọc chi phí hoàn từ tham số hoặc cấu hình hệ thống
-  let returnCost = 0;
-  if (explicitReturnCost !== null && explicitReturnCost !== undefined) {
-    returnCost = Number(explicitReturnCost);
-  } else {
-    const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' });
-    let returnCosts = {};
-    if (returnCostConfig && returnCostConfig.value) {
-      try {
-        returnCosts = JSON.parse(returnCostConfig.value);
-      } catch (e) {}
-    }
-    const orderSource = order.source || 'khác';
-    returnCost = returnCosts[orderSource] ? Number(returnCosts[orderSource]) : 0;
-  }
-
-  // Hoàn lại nguyên liệu vào kho (chỉ hoàn sản phẩm, không hoàn bao bì vận chuyển vì đã hỏng/sử dụng)
   try {
-    const { deductions: refunds } = await buildMaterialDeductions(order.items, null);
-    const updatePromises = [];
-    for (const [materialId, refundQty] of refunds.entries()) {
-      updatePromises.push(
-        (async () => {
-          const mat = await Material.findById(materialId);
-          if (!mat) return;
-          const newStock = Number((mat.stock + refundQty).toFixed(4));
-          const newActual = Number((mat.actualStock + refundQty).toFixed(4));
-          const newStatus = calcStatus(newActual, mat.minStock);
-          await Material.findByIdAndUpdate(materialId, {
-            stock: newStock,
-            actualStock: newActual,
-            status: newStatus,
-          });
-        })()
-      );
-    }
-    await Promise.all(updatePromises);
-  } catch (refundErr) {
-    console.error('[processReturnOrder] Lỗi khi hoàn lại nguyên liệu:', refundErr.message);
+    await session.withTransaction(async () => {
+      const order = await Order.findById(orderId).session(session);
+      if (!order) throw new Error('Không tìm thấy đơn hàng');
+      if (order.status === 'returned' || order.delivery_status === 'returned') {
+        throw new Error('Đơn hàng này đã được đánh dấu bị hoàn trước đó');
+      }
+      if (order.status === 'cancelled' || order.delivery_status === 'cancelled') {
+        throw new Error('Đơn đã huỷ và hoàn kho trước đó, không thể hoàn lần hai');
+      }
+
+      let returnCost = 0;
+      if (explicitReturnCost !== null && explicitReturnCost !== undefined) {
+        returnCost = Number(explicitReturnCost);
+      } else {
+        const returnCostConfig = await SystemConfig.findOne({ key: 'return_cost_per_platform' }).session(session);
+        let returnCosts = {};
+        if (returnCostConfig?.value) {
+          try { returnCosts = JSON.parse(returnCostConfig.value); } catch {}
+        }
+        returnCost = Number(returnCosts[order.source || 'khác'] || 0);
+      }
+      if (!Number.isFinite(returnCost) || returnCost < 0) throw new Error('Chi phí hoàn không hợp lệ');
+
+      // Chỉ hoàn nguyên liệu thuộc sản phẩm; bao bì vận chuyển đã sử dụng không được hoàn.
+      const { deductions: refunds } = await buildMaterialDeductions(order.items, null, session);
+      for (const [materialId, refundQty] of refunds.entries()) {
+        const mat = await Material.findById(materialId).session(session);
+        if (!mat) throw new Error(`Không tìm thấy nguyên liệu ${materialId} để hoàn kho`);
+        const newStock = Number((Number(mat.stock || 0) + refundQty).toFixed(4));
+        const currentActual = mat.actualStock == null ? Number(mat.stock || 0) : Number(mat.actualStock);
+        const newActual = Number((currentActual + refundQty).toFixed(4));
+        await Material.findByIdAndUpdate(materialId, {
+          stock: newStock,
+          actualStock: newActual,
+          status: calcStatus(newActual, mat.minStock),
+        }, { session });
+      }
+
+      if (order.discount_code) {
+        await Coupon.findOneAndUpdate(
+          { code: order.discount_code, used_count: { $gt: 0 } },
+          { $inc: { used_count: -1 } },
+          { session }
+        );
+      }
+
+      // Đơn hoàn không còn tạo doanh thu. Xóa cả dòng doanh thu hiển thị và
+      // giao dịch tự động chuyển vào tài sản chung; các lần rút tiền thật vẫn giữ lại.
+      await FundTransaction.deleteMany({
+        order_id: order._id,
+        $or: [
+          { type: 'order_revenue' },
+          { type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
+        ],
+      }, { session });
+
+      order.status = 'returned';
+      order.delivery_status = 'returned';
+      order.return_cost = returnCost;
+      order.returned_at = new Date();
+      await order.save({ session });
+
+      if (returnCost > 0) {
+        const returnFundAccount = await revenueAccountForOrder(order);
+        if (returnFundAccount.startsWith('carrier_') || BASE_FUND_ACCOUNTS.includes(returnFundAccount)) {
+          await FundTransaction.create([{
+            type: 'revenue_withdrawal', amount: returnCost, fee: 0, fund_change: 0,
+            source: returnFundAccount, order_id: order._id,
+            note: `Phí hoàn đơn hàng ${order.orderId} (từ tài sản riêng)`, created_by: 'System',
+          }], { session });
+        } else {
+          await FundTransaction.create([{
+            type: 'expense_payment', amount: returnCost, fee: 0, fund_change: -returnCost,
+            order_id: order._id, note: `Phí hoàn đơn hàng ${order.orderId} (từ tài sản chung)`,
+            created_by: 'System',
+          }], { session });
+        }
+      }
+
+      result = { updatedOrder: order, returnCost };
+    });
+    return result;
+  } finally {
+    await session.endSession();
   }
-
-  // Xóa giao dịch tự động chuyển doanh thu nếu có (vì đơn đã bị hoàn)
-  await FundTransaction.deleteMany({
-    order_id: order._id,
-    type: 'revenue_withdrawal',
-    note: /^Tự động chuyển doanh thu /,
-  });
-
-  // Cập nhật trạng thái đơn hàng
-  const updatedOrder = await Order.findByIdAndUpdate(
-    orderId,
-    {
-      status: 'returned',
-      return_cost: returnCost,
-      returned_at: new Date(),
-    },
-    { new: true }
-  );
-
-  // Xử lý trừ phí hoàn vào tài sản (nếu có phí hoàn)
-  if (returnCost > 0) {
-    const returnFundAccount = await revenueAccountForOrder(updatedOrder);
-
-    if (returnFundAccount.startsWith('carrier_') || BASE_FUND_ACCOUNTS.includes(returnFundAccount)) {
-      // Trừ vào tài sản riêng của nền tảng (sử dụng revenue_withdrawal với fund_change = 0)
-      // Chấp nhận trừ âm nếu tài sản riêng không đủ
-      await FundTransaction.create({
-        type: 'revenue_withdrawal',
-        amount: returnCost,
-        fee: 0,
-        fund_change: 0,
-        source: returnFundAccount,
-        order_id: updatedOrder._id,
-        note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản riêng)`,
-        created_by: 'System'
-      });
-    } else {
-      // Trừ vào tài sản chung đối với các nền tảng không giữ tiền (facebook, instagram, pos...)
-      await FundTransaction.create({
-        type: 'expense_payment',
-        amount: returnCost,
-        fee: 0,
-        fund_change: -returnCost,
-        order_id: updatedOrder._id,
-        note: `Phí hoàn đơn hàng ${updatedOrder.orderId} (từ tài sản chung)`,
-        created_by: 'System'
-      });
-    }
-  }
-
-  return { updatedOrder, returnCost };
 };
 
 // PATCH /api/orders/:id/return
@@ -1154,7 +1178,11 @@ exports.markAsReturned = async (req, res, next) => {
     if (error.message === 'Không tìm thấy đơn hàng') {
       return res.status(404).json({ success: false, message: error.message });
     }
-    if (error.message === 'Đơn hàng này đã được đánh dấu bị hoàn trước đó') {
+    if ([
+      'Đơn hàng này đã được đánh dấu bị hoàn trước đó',
+      'Đơn đã huỷ và hoàn kho trước đó, không thể hoàn lần hai',
+      'Chi phí hoàn không hợp lệ',
+    ].includes(error.message)) {
       return res.status(400).json({ success: false, message: error.message });
     }
     next(error);
@@ -1355,28 +1383,27 @@ exports.updateDeliveryStatus = async (req, res, next) => {
       });
     }
 
-    // 3. Chuyển sang Giao thất bại (failed) -> hoàn hàng
-    if (newStatus === 'failed') {
-      order.delivery_status = 'failed';
-      await order.save();
-
-      try {
-        const { updatedOrder } = await exports.processReturnOrder(order._id, return_cost);
-        return res.status(200).json({ 
-          success: true, 
-          data: updatedOrder, 
-          message: 'Đã đánh dấu giao thất bại, hoàn sản phẩm về kho.' 
-        });
-      } catch (err) {
-        return res.status(200).json({ 
-          success: true, 
-          data: order, 
-          message: 'Đã cập nhật trạng thái giao thất bại.' 
-        });
-      }
+    // 3. Đơn bắt đầu chuyển hoàn: loại khỏi doanh thu nhưng chưa hoàn kho.
+    if (newStatus === 'returning') {
+      const updatedOrder = await exports.markOrderReturning(order._id);
+      return res.status(200).json({
+        success: true,
+        data: updatedOrder,
+        message: 'Đã cập nhật trạng thái đang hoàn hàng.',
+      });
     }
 
-    // 4. Các trạng thái khác (pending, confirmed, shipping)
+    // 4. Giao thất bại/đã hoàn: kho, coupon và tài chính phải cùng thành công.
+    if (newStatus === 'failed' || newStatus === 'returned') {
+      const { updatedOrder } = await exports.processReturnOrder(order._id, return_cost);
+      return res.status(200).json({
+        success: true,
+        data: updatedOrder,
+        message: 'Đã hoàn hàng, hoàn kho và cập nhật doanh thu.',
+      });
+    }
+
+    // 5. Các trạng thái khác (pending, confirmed, shipping)
     order.delivery_status = newStatus;
     if (newStatus === 'pending' || newStatus === 'confirmed' || newStatus === 'shipping') {
       order.status = 'pending';

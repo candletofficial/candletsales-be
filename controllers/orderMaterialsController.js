@@ -68,7 +68,7 @@ exports.updateItemMaterials = async (req, res, next) => {
     let result;
     await session.withTransaction(async () => {
       const { order, item, entries, index } = await loadItem(req, session);
-      if (['returned', 'cancelled'].includes(order.status) || ['failed', 'cancelled'].includes(order.delivery_status)) {
+      if (['returned', 'cancelled'].includes(order.status) || ['returning', 'returned', 'failed', 'cancelled'].includes(order.delivery_status)) {
         fail('Không thể đổi nguyên liệu của đơn đã hoàn hoặc huỷ.');
       }
       if (materialsRevision(order, item, entries) !== req.body.revision) {

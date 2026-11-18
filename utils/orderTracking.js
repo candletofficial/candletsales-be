@@ -25,12 +25,16 @@ function trackingTokenQuery(token) {
 
 function trackingTransitionError(order, next) {
   if (!order.tracking_enabled || !next || next === order.delivery_status) return null;
-  if (['returned', 'cancelled'].includes(order.status)) return 'Đơn đã hoàn hoặc huỷ không thể đổi trạng thái giao hàng.';
+  if (['returned', 'cancelled'].includes(order.status) || ['returned', 'cancelled'].includes(order.delivery_status)) {
+    return 'Đơn đã hoàn hoặc huỷ không thể đổi trạng thái giao hàng.';
+  }
   const transitions = {
     pending: ['confirmed', 'cancelled'],
     confirmed: ['pending', 'shipping', 'cancelled'],
-    shipping: ['delivered', 'failed'],
-    delivered: [], failed: [], cancelled: [],
+    shipping: ['delivered', 'failed', 'returning'],
+    returning: ['returned'],
+    delivered: ['returning', 'returned'],
+    failed: [], returned: [], cancelled: [],
   };
   return transitions[order.delivery_status || 'pending']?.includes(next)
     ? null : 'Vui lòng chuyển trạng thái giao hàng theo đúng thứ tự.';

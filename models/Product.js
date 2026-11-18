@@ -3,6 +3,18 @@ const mongoose = require('mongoose');
 const productSchema = new mongoose.Schema({
   productId: { type: String, required: true },
   name: { type: String, required: true },
+  product_type: {
+    type: String,
+    enum: ['sellable', 'sub_formula'],
+    default: 'sellable',
+    index: true,
+  },
+  batch_yield: {
+    type: Number,
+    default: 1,
+    min: 1,
+    description: 'Số sản phẩm/phần thành phẩm thu được từ một mẻ công thức phụ.',
+  },
   image: { type: String, default: null }, // Main/Thumbnail
   images: [{ type: String }], // Gallery
   description: { type: String, default: '' },
@@ -20,6 +32,17 @@ const productSchema = new mongoose.Schema({
   wick_type: [{ type: String }],
 
   base_ingredients: [{
+    ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },
+    quantity: { type: Number, required: true, min: 0 }
+  }],
+
+  // Công thức phụ được gắn theo số mẻ. Mỗi mẻ sẽ được bung thành nguyên liệu
+  // thực tế trong resolved_base_ingredients để tính giá vốn và trừ kho.
+  formula_components: [{
+    formula_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    quantity: { type: Number, required: true, min: 0.0001, default: 1 }
+  }],
+  resolved_base_ingredients: [{
     ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },
     quantity: { type: Number, required: true, min: 0 }
   }],

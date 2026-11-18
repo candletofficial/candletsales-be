@@ -27,7 +27,8 @@ const recipeCapacity = (entries = []) => {
 
 const enrichProductAvailability = (product) => {
   const value = product?.toObject ? product.toObject() : { ...product };
-  const base = value.base_ingredients || [];
+  const base = value.resolved_base_ingredients?.length
+    ? value.resolved_base_ingredients : value.base_ingredients || [];
   value.skus = (value.skus || []).map((sku) => ({
     ...sku,
     stock: recipeCapacity([...base, ...(sku.extra_ingredients || [])]),

@@ -119,7 +119,7 @@ const orderSchema = new mongoose.Schema({
   // Trạng thái giao hàng (Đặc biệt dành cho đơn Website)
   delivery_status: {
     type: String,
-    enum: ['pending', 'confirmed', 'shipping', 'delivered', 'failed', 'cancelled'],
+    enum: ['pending', 'confirmed', 'shipping', 'delivered', 'returning', 'returned', 'failed', 'cancelled'],
     default: 'pending',
   },
   cancelled_reason: { type: String, default: '' },

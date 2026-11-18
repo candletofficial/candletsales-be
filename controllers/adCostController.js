@@ -84,7 +84,13 @@ exports.topupPlatform = async (req, res, next) => {
     if (fundingSource === 'platform') {
       const Order = require('../models/Order');
       const orderRevenueAgg = await Order.aggregate([
-        { $match: { status: { $ne: 'returned' }, source: platform } },
+        {
+          $match: {
+            status: { $nin: ['returned', 'cancelled'] },
+            delivery_status: { $nin: ['returning', 'returned', 'failed', 'cancelled'] },
+            source: platform,
+          },
+        },
         { $group: { _id: null, totalRevenue: { $sum: '$total_price' } } }
       ]);
       const totalRevenue = orderRevenueAgg.length > 0 ? orderRevenueAgg[0].totalRevenue : 0;

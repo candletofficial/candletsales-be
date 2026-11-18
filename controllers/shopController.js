@@ -6,8 +6,9 @@ const { enrichProductAvailability } = require('../utils/productAvailability');
 // Lấy danh sách sản phẩm hiển thị trên trang chủ cửa hàng
 exports.getShopProducts = async (req, res, next) => {
   try {
-    const products = await Product.find()
+    const products = await Product.find({ product_type: { $ne: 'sub_formula' } })
       .populate('base_ingredients.ingredient_id')
+      .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id')
       .sort({ createdAt: -1 });
 
@@ -29,6 +30,7 @@ exports.getShopProducts = async (req, res, next) => {
     const result = products.map((p) => {
       const obj = enrichProductAvailability(p);
       delete obj.base_ingredients;
+      delete obj.resolved_base_ingredients;
       for (const sku of obj.skus || []) delete sku.extra_ingredients;
       const stats = statsMap[obj._id.toString()];
       obj.avgRating = stats && stats.avgRating ? stats.avgRating.toFixed(1) : "5.0";
@@ -58,8 +60,9 @@ exports.getShopProducts = async (req, res, next) => {
 // Lấy chi tiết sản phẩm
 exports.getShopProductById = async (req, res, next) => {
   try {
-    const product = await Product.findById(req.params.id)
+    const product = await Product.findOne({ _id: req.params.id, product_type: { $ne: 'sub_formula' } })
       .populate('base_ingredients.ingredient_id')
+      .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id');
     if (!product) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
@@ -85,6 +88,8 @@ exports.getShopProductById = async (req, res, next) => {
         unit: item.ingredient_id.unit, supplier: item.ingredient_id.supplier,
       } : null,
     }));
+    delete obj.resolved_base_ingredients;
+    delete obj.formula_components;
     for (const sku of obj.skus || []) delete sku.extra_ingredients;
     if (reviewStats.length > 0) {
       obj.avgRating = reviewStats[0].avgRating.toFixed(1);

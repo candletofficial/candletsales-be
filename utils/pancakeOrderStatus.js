@@ -4,10 +4,10 @@ const normalize = value => String(value ?? '').normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd')
   .toLowerCase().trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
 
-const returnNames = new Set([
-  'returning', 'returned', 'dang hoan', 'dang hoan hang', 'da hoan',
-  'da hoan hang', 'hoan', 'hoan hang', 'chuyen hoan', 'dang chuyen hoan',
+const returningNames = new Set([
+  'returning', 'dang hoan', 'dang hoan hang', 'chuyen hoan', 'dang chuyen hoan',
 ]);
+const returnedNames = new Set(['returned', 'da hoan', 'da hoan hang', 'hoan', 'hoan hang']);
 const cancelNames = new Set(['canceled', 'cancelled', 'cancel', 'huy', 'da huy', 'huy don', 'huy don hang']);
 const removedNames = new Set(['removed', 'deleted', 'xoa gan day', 'da xoa']);
 const activeNames = new Set([
@@ -26,9 +26,9 @@ function classifyPancakeStatus(payload) {
 
   // A partial return must not refund every item in the order.
   if (code === 15 || name === 'part returned' || name === 'hoan mot phan') return 'other';
-  // Keep the application's existing mapping of both returning/returned to Hoàn hàng.
   // Return evidence on the POS order takes priority over cancellation metadata.
-  if (code === 4 || code === 5 || returnNames.has(name)) return 'returned';
+  if (code === 4 || returningNames.has(name)) return 'returning';
+  if (code === 5 || returnedNames.has(name)) return 'returned';
   if (code === 6 || cancelNames.has(name)) return 'cancelled';
   if (code === 7 || removedNames.has(name)) return 'removed';
 
@@ -36,7 +36,8 @@ function classifyPancakeStatus(payload) {
   // Use partner status only if the POS status itself is unavailable/unrecognized.
   if (knownCodes.has(code) || activeNames.has(name)) return 'other';
   const partner = normalize(payload.partner?.partner_status);
-  if (returnNames.has(partner)) return 'returned';
+  if (returningNames.has(partner)) return 'returning';
+  if (returnedNames.has(partner)) return 'returned';
   if (cancelNames.has(partner)) return 'cancelled';
   return 'other';
 }

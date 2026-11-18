@@ -11,6 +11,16 @@ const materialSchema = new mongoose.Schema({
     required: false,
     trim: true,
   },
+  isConcentratedOil: {
+    type: Boolean,
+    default: false,
+    description: 'Tinh dầu đậm đặc, dùng để hiển thị tag nhận diện trên giao diện.',
+  },
+  oilColor: {
+    type: String,
+    default: '',
+    description: 'Màu nhận diện tùy chọn của tinh dầu.',
+  },
   sku: {
     type: String,
     required: true,

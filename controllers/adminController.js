@@ -331,10 +331,10 @@ exports.getDashboardStats = async (req, res) => {
     const isActiveRevenueOrder = o => (
       o.status !== 'returned'
       && o.status !== 'cancelled'
-      && o.delivery_status !== 'failed'
-      && o.delivery_status !== 'cancelled'
+      && !['returning', 'returned', 'failed', 'cancelled'].includes(o.delivery_status)
     );
-    const isReturnedOrder = o => o.status === 'returned' || o.delivery_status === 'failed';
+    const isReturnedOrder = o => o.status === 'returned'
+      || ['returning', 'returned', 'failed'].includes(o.delivery_status);
 
     const activeCurrent = ordersCurrent.filter(isActiveRevenueOrder);
     const returnedCurrent = ordersCurrent.filter(isReturnedOrder);

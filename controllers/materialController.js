@@ -1,6 +1,12 @@
 const Material = require('../models/Material');
 const Product = require('../models/Product');
 
+const normalizeOilColor = (value) => {
+  const color = String(value || '').trim().toLowerCase();
+  const legacy = ['lavender', 'rose', 'amber', 'forest', 'ocean', 'citrus', 'wood'];
+  return /^#[0-9a-f]{6}$/.test(color) || legacy.includes(color) ? color : '';
+};
+
 // Lấy danh sách nguyên vật liệu
 exports.getMaterials = async (req, res, next) => {
   try {
@@ -36,6 +42,8 @@ const calculateStatus = (actualStock, minStock) => {
 exports.createMaterial = async (req, res, next) => {
   try {
     const payload = { ...req.body };
+    payload.isConcentratedOil = payload.isConcentratedOil === true || payload.isConcentratedOil === 'true';
+    payload.oilColor = normalizeOilColor(payload.oilColor);
     // Tự động tạo SKU nếu frontend không gửi
     if (!payload.sku) {
       payload.sku = `NL-${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 10)}`;
@@ -66,6 +74,11 @@ exports.updateMaterial = async (req, res, next) => {
     if (!currentMaterial) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
     }
+
+    if (payload.isConcentratedOil !== undefined) {
+      payload.isConcentratedOil = payload.isConcentratedOil === true || payload.isConcentratedOil === 'true';
+    }
+    if (payload.oilColor !== undefined) payload.oilColor = normalizeOilColor(payload.oilColor);
 
     if (payload.sku !== undefined) {
       payload.sku = String(payload.sku).trim();

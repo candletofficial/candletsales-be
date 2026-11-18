@@ -27,8 +27,10 @@ const fetchDashboardData = async () => {
     Material.find({}),
   ]);
 
-  const activeCurrent = ordersCurrent.filter((o) => o.status !== 'returned');
-  const returnedCurrent = ordersCurrent.filter((o) => o.status === 'returned');
+  const activeCurrent = ordersCurrent.filter((o) => o.status !== 'returned'
+    && !['returning', 'returned', 'failed', 'cancelled'].includes(o.delivery_status));
+  const returnedCurrent = ordersCurrent.filter((o) => o.status === 'returned'
+    || ['returning', 'returned', 'failed'].includes(o.delivery_status));
   const normalCompletedCurrent = activeCurrent.filter((o) => !o.is_replacement && !o.is_seeding);
   const replacementCurrent = activeCurrent.filter((o) => o.is_replacement);
   const seedingCurrent = activeCurrent.filter((o) => o.is_seeding);
@@ -56,12 +58,14 @@ const fetchDashboardData = async () => {
   ordersCurrent.forEach((o) => {
     const src = o.source || 'khác';
     if (!platformMap[src]) platformMap[src] = { source: src, orders: 0, revenue: 0, returned: 0, replacements: 0 };
-    if (o.status !== 'returned') {
+    const isReturned = o.status === 'returned' || ['returning', 'returned', 'failed'].includes(o.delivery_status);
+    const isActive = !isReturned && o.status !== 'cancelled' && o.delivery_status !== 'cancelled';
+    if (isActive) {
       if (!o.is_replacement && !o.is_seeding) {
         platformMap[src].orders += 1;
         platformMap[src].revenue += o.total_price || 0;
       } else if (o.is_replacement) platformMap[src].replacements += 1;
-    } else if (o.status === 'returned') {
+    } else if (isReturned) {
       platformMap[src].returned += 1;
     }
   });

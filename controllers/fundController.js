@@ -24,7 +24,10 @@ exports.getSummary = async (req, res) => {
 
     // 2. Calculate Platform Balances
     // Get total revenue for each platform
-    const completedOrders = await Order.find({ status: 'completed' })
+    const completedOrders = await Order.find({
+      status: 'completed',
+      delivery_status: { $nin: ['returning', 'returned', 'failed', 'cancelled'] },
+    })
       .select('source total_price tracking_enabled payment_method shipping_carrier revenue_account')
       .lean();
 

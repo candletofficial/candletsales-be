@@ -2,7 +2,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Material = require('../models/Material');
 const FundTransaction = require('../models/FundTransaction');
-const { buildMaterialDeductions } = require('./orderController');
+const { buildMaterialDeductions, markOrderReturning, processReturnOrder } = require('./orderController');
 const { classifyPancakeStatus } = require('../utils/pancakeOrderStatus');
 const { applyPancakeCustomerDetails } = require('../utils/pancakeCustomerDetails');
 const { getEnabledCarrierIds, resolveOrderRevenueAccount } = require('../utils/carrierCodAccounts');
@@ -115,6 +115,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
     // Check if order already exists in our database
     const existingOrder = await Order.findOne({ pancake_order_id: payload.id });
     const pancakeStatus = classifyPancakeStatus(payload);
+    const isReturning = pancakeStatus === 'returning';
     const isReturned = pancakeStatus === 'returned';
     const isCancelled = pancakeStatus === 'cancelled' || pancakeStatus === 'removed';
     if (existingOrder) {
@@ -126,18 +127,27 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         return res.status(200).json({ success: true, message: 'Order already returned' });
       }
 
+      if (isReturning) {
+        if (existingOrder.status === 'cancelled') {
+          return res.status(200).json({ success: true, message: 'Cancelled order cannot enter return flow' });
+        }
+        await markOrderReturning(existingOrder._id);
+        return res.status(200).json({ success: true, message: 'Order marked as returning' });
+      }
+
       if (isReturned) {
         console.log(`Order ${payload.id} is returned on Pancake. Marking as returned...`);
-        const { processReturnOrder } = require('./orderController');
-        // A retained cancelled order has already had its materials refunded.
         if (existingOrder.status === 'cancelled') {
-          existingOrder.status = 'returned';
-          existingOrder.returned_at = new Date();
-          await existingOrder.save();
-        } else {
-          await processReturnOrder(existingOrder._id, null);
+          return res.status(200).json({ success: true, message: 'Cancelled order was already refunded' });
         }
+        await processReturnOrder(existingOrder._id, null);
         return res.status(200).json({ success: true, message: 'Order marked as returned' });
+      }
+
+      // Pancake có thể gửi lại sự kiện cũ sau khi đơn đã bắt đầu chuyển hoàn.
+      // Không cho sự kiện đó ghi nhận lại doanh thu hoặc hạ trạng thái hoàn.
+      if (existingOrder.delivery_status === 'returning') {
+        return res.status(200).json({ success: true, message: 'Ignored stale event while order is returning' });
       }
 
       if (existingOrder.status === 'cancelled') {
@@ -242,14 +252,15 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       // If unit_cost is 0 for any item, we should try to recalculate it
       const hasZeroCost = existingOrder.items.some(i => !i.unit_cost || i.unit_cost === 0);
       if (hasZeroCost) {
-        const allProducts = await Product.find().populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+        const allProducts = await Product.find({ product_type: { $ne: 'sub_formula' } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
         for (let item of existingOrder.items) {
           if (!item.unit_cost || item.unit_cost === 0) {
             let matchedProduct = allProducts.find(p => p._id.toString() === item.product_id?.toString());
             if (matchedProduct) {
               let base_cost = 0;
-              if (matchedProduct.base_ingredients) {
-                matchedProduct.base_ingredients.forEach(bi => {
+              const baseIngredients = matchedProduct.resolved_base_ingredients?.length ? matchedProduct.resolved_base_ingredients : matchedProduct.base_ingredients;
+              if (baseIngredients) {
+                baseIngredients.forEach(bi => {
                   if (bi.ingredient_id && bi.ingredient_id.price) {
                     base_cost += bi.ingredient_id.price * bi.quantity;
                   }
@@ -286,14 +297,14 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       return res.status(200).json({ success: true, message: 'Order already exists' });
     }
 
-    if (isCancelled) {
-      return res.status(200).json({ success: true, message: 'Ignored: Cancelled order not in DB' });
+    if (isCancelled || isReturning) {
+      return res.status(200).json({ success: true, message: 'Ignored: Terminal order not in DB' });
     }
     if (!payload.customer || !Array.isArray(payload.items)) {
       return res.status(200).json({ success: true, message: 'Ignored: Full order payload required for creation' });
     }
 
-    const allProducts = await Product.find().populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+    const allProducts = await Product.find({ product_type: { $ne: 'sub_formula' } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
     const orderItems = [];
 
     // Map Pancake items to our Products
@@ -412,8 +423,9 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       let unit_cost = 0;
       if (matchedProduct) {
         let base_cost = 0;
-        if (matchedProduct.base_ingredients) {
-          matchedProduct.base_ingredients.forEach(item => {
+        const baseIngredients = matchedProduct.resolved_base_ingredients?.length ? matchedProduct.resolved_base_ingredients : matchedProduct.base_ingredients;
+        if (baseIngredients) {
+          baseIngredients.forEach(item => {
             if (item.ingredient_id && item.ingredient_id.price) {
               base_cost += item.ingredient_id.price * item.quantity;
             }
@@ -562,6 +574,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       packaging_cost: logisticsCost,
       note: payload.note || '',
       status: initialStatus,
+      delivery_status: isReturned ? 'returned' : 'pending',
       returned_at: isReturned ? new Date() : null,
       ordered_at: orderedAt,
     });
