@@ -8,6 +8,7 @@ const FundTransaction = require('../models/FundTransaction');
 const AffiliateFee = require('../models/AffiliateFee');
 const { filterOrphanOrderRevenue } = require('../utils/filterOrphanOrderRevenue');
 const { groupFundHistory } = require('../utils/groupFundHistory');
+const { buildCurrentUnitCostResolver } = require('../utils/currentOrderCost');
 
 // @desc    Lấy danh sách tài khoản (hỗ trợ filter status, role, tìm kiếm)
 // @route   GET /api/admin/users
@@ -325,6 +326,7 @@ exports.getDashboardStats = async (req, res) => {
       FundTransaction.find({}).sort({ createdAt: -1 }).limit(10).lean(),
       AffiliateFee.find({})
     ]);
+    const unitCostFor = await buildCurrentUnitCostResolver([...ordersCurrent, ...ordersPrev]);
     const visibleFundTransactions = groupFundHistory(await filterOrphanOrderRevenue(recentFundTransactions));
 
     // 1. Calculate main metrics. Keep this definition aligned with OrderManagement.
@@ -395,27 +397,27 @@ exports.getDashboardStats = async (req, res) => {
     const normalCompletedPrev = activePrev.filter(o => !o.is_replacement && !o.is_seeding);
 
     const currentCOGS = normalCompletedCurrent.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
     const prevCOGS = normalCompletedPrev.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0);
     }, 0);
 
     const currentLogistics = normalCompletedCurrent.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
     const prevLogistics = normalCompletedPrev.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
 
     const currentReplacementCost = replacementCurrent.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
     const prevReplacementCost = activePrev.filter(o => o.is_replacement).reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
 
     const currentSeedingCost = seedingCurrent.reduce((sum, o) => {
-      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
     const prevSeedingCost = activePrev.filter(o => o.is_seeding).reduce((sum, o) => {
-      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
+      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0);
     }, 0);
     const seedingCostGrowth = prevSeedingCost === 0 ? null : ((currentSeedingCost - prevSeedingCost) / prevSeedingCost * 100);
 
@@ -443,7 +445,7 @@ exports.getDashboardStats = async (req, res) => {
           if (!o.is_replacement && !o.is_seeding) {
             chartDataMap[dateKey].revenue += (o.total_price || 0);
           }
-          const cogs = (o.items || []).reduce((sum, item) => sum + ((item.unit_cost || 0) * item.quantity), 0) + (o.packaging_cost || 0);
+          const cogs = (o.items || []).reduce((sum, item) => sum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0);
           const logistics = (o.logistics_cost || 0);
           chartDataMap[dateKey].cogs += cogs;
           chartDataMap[dateKey].cost += cogs + logistics + (o.seeding_cost || 0);
@@ -548,7 +550,7 @@ exports.getDashboardStats = async (req, res) => {
           };
         }
         productMap[key].variantsMap[variantKey].totalQty += item.quantity;
-        productMap[key].variantsMap[variantKey].totalCOGS += (item.unit_cost || 0) * item.quantity;
+        productMap[key].variantsMap[variantKey].totalCOGS += unitCostFor(item) * item.quantity;
         
         let itemRevenue = 0;
         if (orderTotalRaw > 0) {
@@ -561,7 +563,7 @@ exports.getDashboardStats = async (req, res) => {
         }
         productMap[key].variantsMap[variantKey].totalRevenue += itemRevenue;
 
-        productMap[key].totalCOGS += (item.unit_cost || 0) * item.quantity;
+        productMap[key].totalCOGS += unitCostFor(item) * item.quantity;
       });
     });
     // Count returned items
