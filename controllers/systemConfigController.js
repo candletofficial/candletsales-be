@@ -1,8 +1,13 @@
 const SystemConfig = require('../models/SystemConfig');
 
+const PRIVATE_CONFIG_KEYS = new Set(['ai_analyst_config', 'openai_api_key']);
+
 exports.getConfig = async (req, res, next) => {
   try {
     const { key } = req.params;
+    if (PRIVATE_CONFIG_KEYS.has(key)) {
+      return res.status(403).json({ success: false, message: 'Cấu hình bảo mật chỉ truy cập qua API quản trị.' });
+    }
     let config = await SystemConfig.findOne({ key });
     if (!config) {
       // Default to false if not found
