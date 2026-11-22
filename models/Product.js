@@ -59,6 +59,7 @@ const productSchema = new mongoose.Schema({
   skus: [{
     id: { type: String, required: true }, // e.g. "SP-1054537"
     price: { type: Number, default: 0 }, // Selling price for this specific SKU
+    image: { type: String, default: '' }, // Optional image linked to this variant
     combination: [{ type: String }], // Array of option ids, e.g. ["g1-RBY", "g2-LRG"]
     extra_ingredients: [{
       ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },

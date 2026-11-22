@@ -170,7 +170,7 @@ const resolveCart = async (requestedCart) => {
       product_id: product._id,
       productId: product.productId,
       product_name: product.name,
-      product_image: product.image,
+      product_image: sku?.image || product.image,
       sku_id: sku?.id || null,
       sku_label: labels.join(' - '),
       customer_label: customerLabel || labels.join(' - '),

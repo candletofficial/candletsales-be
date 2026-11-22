@@ -52,7 +52,7 @@ exports.addToCart = async (req, res, next) => {
 exports.updateCartItem = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
-    const { product_id, sku_id, quantity } = req.body;
+    const { product_id, sku_id, new_sku_id, quantity } = req.body;
 
     const cart = await Cart.findOne({ sessionId });
     if (!cart) return res.status(404).json({ success: false, message: 'Cart not found' });
@@ -62,7 +62,40 @@ exports.updateCartItem = async (req, res, next) => {
       item.sku_id === sku_id
     );
 
-    if (itemIndex > -1) {
+    if (itemIndex > -1 && new_sku_id && new_sku_id !== sku_id) {
+      const product = await Product.findById(product_id);
+      const targetSku = product?.skus?.find(sku => sku.id === new_sku_id);
+      if (!targetSku) {
+        return res.status(400).json({ success: false, message: 'Phân loại mới không tồn tại' });
+      }
+      if (targetSku.stock !== null && targetSku.stock !== undefined && Number(targetSku.stock) <= 0) {
+        return res.status(400).json({ success: false, message: 'Phân loại mới đã hết hàng' });
+      }
+
+      const targetIndex = cart.items.findIndex((item, index) => (
+        index !== itemIndex
+        && item.product_id.toString() === product_id
+        && item.sku_id === new_sku_id
+      ));
+      const nextQuantity = Number(quantity) > 0 ? Number(quantity) : cart.items[itemIndex].quantity;
+      const mergedQuantity = targetIndex > -1
+        ? cart.items[targetIndex].quantity + nextQuantity
+        : nextQuantity;
+
+      if (targetSku.stock !== null && targetSku.stock !== undefined
+        && Number.isFinite(Number(targetSku.stock)) && mergedQuantity > Number(targetSku.stock)) {
+        return res.status(400).json({ success: false, message: `Phân loại mới chỉ còn ${targetSku.stock} sản phẩm` });
+      }
+
+      if (targetIndex > -1) {
+        cart.items[targetIndex].quantity = mergedQuantity;
+        cart.items.splice(itemIndex, 1);
+      } else {
+        cart.items[itemIndex].sku_id = new_sku_id;
+        cart.items[itemIndex].quantity = nextQuantity;
+      }
+      await cart.save();
+    } else if (itemIndex > -1) {
       if (quantity <= 0) {
         cart.items.splice(itemIndex, 1);
       } else {

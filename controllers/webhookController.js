@@ -464,11 +464,12 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         }
       }
 
+      const matchedSku = matchedProduct?.skus?.find(s => s.id === matchedSkuId);
       orderItems.push({
         product_id: matchedProduct ? matchedProduct._id : null,
         productId: matchedProduct ? matchedProduct.productId : 'UNKNOWN_SHOPEE',
         product_name: matchedProduct ? matchedProduct.name : shopeeName,
-        product_image: matchedProduct ? matchedProduct.image : null,
+        product_image: matchedSku?.image || matchedProduct?.image || null,
         sku_id: matchedSkuId, // Use the matched SKU ID if found
         sku_label: realSkuLabel, // Use our app's label instead of Pancake's
         unit_price: item.variation_info?.retail_price || 0,
