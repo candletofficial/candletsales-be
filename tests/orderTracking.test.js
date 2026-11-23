@@ -5,6 +5,7 @@ const Product = require('../models/Product');
 const Material = require('../models/Material');
 const ShippingConfig = require('../models/ShippingConfig');
 const FundTransaction = require('../models/FundTransaction');
+const SystemConfig = require('../models/SystemConfig');
 const inventory = require('../utils/inventoryHelpers');
 const mail = require('../utils/orderEmailNotifier');
 inventory.triggerAutoConfirmImports = async () => {};
@@ -30,14 +31,15 @@ const makeOrder = (status = 'pending') => ({
 beforeEach(() => {
   mock.method(Product, 'find', async () => []);
   mock.method(ShippingConfig, 'findOne', async () => null);
-  mock.method(Order, 'create', async data => ({ _id: 'order-1', ...data }));
+  mock.method(SystemConfig, 'findOne', () => ({ lean: async () => null }));
+  mock.method(Order, 'create', async data => ({ _id: 'order-1', ...data, async save() { return this; } }));
   mock.method(FundTransaction, 'create', async data => data);
   mock.method(FundTransaction, 'findOne', async () => null);
   mock.method(FundTransaction, 'deleteMany', async () => ({}));
 });
 afterEach(() => mock.restoreAll());
 
-test('manual tracked creation starts pending with an opaque link and does not book revenue', async () => {
+test('manual tracked transfers book revenue immediately while remaining delivery-pending', async () => {
   for (const source of ['shopee', 'facebook', 'pos', 'website']) {
     const res = response();
     await createOrder({ user: { role: 'admin' }, body: {
@@ -51,7 +53,13 @@ test('manual tracked creation starts pending with an opaque link and does not bo
     assert.equal(res.body.data.tracking_enabled, true);
     assert.equal(res.body.data.payment_status, source === 'website' ? 'pending' : 'paid');
   }
-  assert.equal(FundTransaction.create.mock.callCount(), 0);
+  const ledgerWrites = FundTransaction.create.mock.calls.map(call => call.arguments[0]);
+  const collections = ledgerWrites.filter(tx => tx.type === 'revenue_withdrawal');
+  const revenueRows = ledgerWrites.filter(tx => tx.type === 'order_revenue');
+  assert.equal(collections.length, 3);
+  assert.equal(revenueRows.length, 3);
+  assert.ok(collections.every(tx => tx.fund_change === 100000 && tx.source !== 'website'));
+  assert.ok(revenueRows.every(tx => tx.source === 'common'));
 });
 
 test('ordinary manual creation retains its previous completed behavior', async () => {
@@ -71,6 +79,27 @@ test('manual bank transfers are paid immediately without a SePay payment code', 
   assert.equal(res.body.data.payment_status, 'paid');
   assert.equal(res.body.data.payment_code, undefined);
   assert.ok(res.body.data.paid_at instanceof Date);
+});
+
+test('confirmed website transfers are credited to the website account before delivery', async () => {
+  const res = response();
+  await createOrder({
+    user: { role: 'admin' },
+    internalPaymentConfirmation: { transactionId: 'sepay-transaction-1' },
+    body: {
+      items: [item], total_price: 100000, source: 'website',
+      payment_method: 'transfer', create_tracking_link: true,
+    },
+  }, res, fail);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.data.status, 'pending');
+  assert.equal(res.body.data.payment_status, 'paid');
+  const ledgerWrites = FundTransaction.create.mock.calls.map(call => call.arguments[0]);
+  assert.equal(ledgerWrites.length, 1);
+  assert.equal(ledgerWrites[0].type, 'order_revenue');
+  assert.equal(ledgerWrites[0].source, 'website');
+  assert.equal(ledgerWrites[0].platform_change, 100000);
 });
 
 test('public checkout cannot request admin tracking creation', async () => {
@@ -256,7 +285,11 @@ test('delivery books revenue and automatic collection once, even when the reques
   const transactions = [];
   mock.method(Order, 'findById', async () => order);
   mock.method(FundTransaction, 'findOne', async query => transactions.find(tx => tx.type === query.type));
-  mock.method(FundTransaction, 'create', async data => { transactions.push(data); return data; });
+  mock.method(FundTransaction, 'create', async data => {
+    const tx = { ...data, async save() { return this; } };
+    transactions.push(tx);
+    return tx;
+  });
   for (let i = 0; i < 2; i++) {
     const res = response();
     await updateDeliveryStatus({ params: { id: order._id }, body: { delivery_status: 'delivered' }, user: {} }, res, fail);
@@ -269,6 +302,8 @@ test('delivery books revenue and automatic collection once, even when the reques
 
 test('cancelling a tracked order refunds its material once and keeps the link valid', async () => {
   const order = makeOrder('confirmed');
+  order.payment_method = 'transfer';
+  order.payment_status = 'paid';
   order.items = [{ ...item, product_id: 'product-1' }];
   const material = { stock: 10, actualStock: 10, minStock: 1 };
   mock.method(Order, 'findById', async () => order);
@@ -280,6 +315,9 @@ test('cancelling a tracked order refunds its material once and keeps the link va
   assert.equal(material.actualStock, 12);
   assert.equal(stock.mock.callCount(), 1);
   assert.match(order.tracking_token, /^[a-f0-9]{48}$/);
+  const ledgerDeletion = FundTransaction.deleteMany.mock.calls[0].arguments[0];
+  assert.deepEqual(ledgerDeletion.$or[0], { type: 'order_revenue' });
+  assert.equal(ledgerDeletion.$or[1].type, 'revenue_withdrawal');
 });
 
 test('admin detail saves carry a tracked order through confirmation, shipping and delivery', async () => {

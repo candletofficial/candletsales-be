@@ -1,20 +1,48 @@
 const Product = require('../models/Product');
+const Material = require('../models/Material');
 const { removeFileIfLocal } = require('./uploadController');
 const { enrichProductAvailability } = require('../utils/productAvailability');
 
 const materialId = value => String(value?._id || value || '');
 const formulaId = value => String(value?.formula_id?._id || value?.formula_id || '');
+const replacementForId = value => String(value?.replacement_for?._id || value?.replacement_for || '');
 
 const mergeIngredients = (entries = []) => {
   const totals = new Map();
   for (const entry of entries) {
     const id = materialId(entry?.ingredient_id);
+    const replacementFor = replacementForId(entry);
     const quantity = Number(entry?.quantity);
     if (!id || !Number.isFinite(quantity) || quantity < 0) continue;
-    totals.set(id, Number(((totals.get(id) || 0) + quantity).toFixed(4)));
+    const key = `${id}:${replacementFor}`;
+    const current = totals.get(key) || { ingredient_id: id, replacement_for: replacementFor || null, quantity: 0, suspended: false };
+    current.quantity = Number((current.quantity + quantity).toFixed(4));
+    current.suspended = current.suspended || entry?.suspended === true;
+    totals.set(key, current);
   }
-  return [...totals].filter(([, quantity]) => quantity > 0)
-    .map(([ingredient_id, quantity]) => ({ ingredient_id, quantity }));
+  return [...totals].filter(([, value]) => value.quantity > 0)
+    .map(([, value]) => value);
+};
+
+const applyMaterialSuspensions = async payload => {
+  const groups = [payload.base_ingredients || [], payload.resolved_base_ingredients || []];
+  for (const sku of payload.skus || []) groups.push(sku.extra_ingredients || []);
+  const ids = [...new Set(groups.flat().map(entry => materialId(entry?.ingredient_id)).filter(Boolean))];
+  if (!ids.length) return payload;
+  const paused = await Material.find({
+    _id: { $in: ids },
+    isTrackingEnabled: false,
+    formulaSuspended: true,
+  }).select('_id').lean();
+  const pausedIds = new Set(paused.map(item => String(item._id)));
+  const tag = entries => (entries || []).map(entry => ({
+    ...entry,
+    suspended: pausedIds.has(materialId(entry.ingredient_id)),
+  }));
+  payload.base_ingredients = tag(payload.base_ingredients);
+  payload.resolved_base_ingredients = tag(payload.resolved_base_ingredients);
+  payload.skus = (payload.skus || []).map(sku => ({ ...sku, extra_ingredients: tag(sku.extra_ingredients) }));
+  return payload;
 };
 
 const prepareProductPayload = async (input, existing = null) => {
@@ -36,7 +64,7 @@ const prepareProductPayload = async (input, existing = null) => {
     payload.skus = [];
     payload.formula_components = [];
     payload.resolved_base_ingredients = payload.base_ingredients;
-    return payload;
+    return applyMaterialSuspensions(payload);
   }
 
   payload.batch_yield = 1;
@@ -82,12 +110,17 @@ const prepareProductPayload = async (input, existing = null) => {
       ? formula.resolved_base_ingredients : formula.base_ingredients || [];
     const batchYield = Math.max(1, Number(formula.batch_yield) || 1);
     for (const ingredient of ingredients) {
-      expanded.push({ ingredient_id: ingredient.ingredient_id, quantity: (Number(ingredient.quantity) * component.quantity) / batchYield });
+      expanded.push({
+        ingredient_id: ingredient.ingredient_id,
+        quantity: (Number(ingredient.quantity) * component.quantity) / batchYield,
+        suspended: ingredient.suspended === true,
+        replacement_for: ingredient.replacement_for || null,
+      });
     }
   }
   payload.formula_components = normalizedComponents;
   payload.resolved_base_ingredients = mergeIngredients(expanded);
-  return payload;
+  return applyMaterialSuspensions(payload);
 };
 
 const refreshDependentProducts = async formulaIdValue => {
@@ -117,7 +150,7 @@ exports.getProducts = async (req, res, next) => {
       let base_cost = 0;
       if (obj.resolved_base_ingredients?.length || obj.base_ingredients) {
         (obj.resolved_base_ingredients?.length ? obj.resolved_base_ingredients : obj.base_ingredients).forEach(item => {
-          if (item.ingredient_id && item.ingredient_id.price) {
+          if (!item.suspended && item.ingredient_id && item.ingredient_id.price) {
             base_cost += item.ingredient_id.price * item.quantity;
           }
         });
@@ -130,7 +163,7 @@ exports.getProducts = async (req, res, next) => {
           let extra_cost = 0;
           if (sku.extra_ingredients) {
             sku.extra_ingredients.forEach(item => {
-              if (item.ingredient_id && item.ingredient_id.price) {
+              if (!item.suspended && item.ingredient_id && item.ingredient_id.price) {
                 extra_cost += item.ingredient_id.price * item.quantity;
               }
             });

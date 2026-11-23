@@ -25,7 +25,11 @@ exports.getSummary = async (req, res) => {
     // 2. Calculate Platform Balances
     // Get total revenue for each platform
     const completedOrders = await Order.find({
-      status: 'completed',
+      $or: [
+        { status: 'completed' },
+        { payment_method: 'transfer', payment_status: 'paid' },
+      ],
+      status: { $nin: ['cancelled', 'returned'] },
       delivery_status: { $nin: ['returning', 'returned', 'failed', 'cancelled'] },
     })
       .select('source total_price tracking_enabled payment_method shipping_carrier revenue_account')
@@ -108,13 +112,39 @@ exports.getSummary = async (req, res) => {
     ]);
     const totalImportDebt = importDebtAgg.length > 0 ? importDebtAgg[0].totalDebt : 0;
 
+    // Active orders that have not been paid yet (for example COD orders still
+    // being processed). Completed, cancelled and returned orders are excluded.
+    const unpaidOrders = await Order.find({
+      total_price: { $gt: 0 },
+      $or: [
+        { payment_status: 'pending' },
+        { payment_status: { $exists: false } },
+      ],
+      status: { $nin: ['completed', 'cancelled', 'returned'] },
+      delivery_status: { $nin: ['delivered', 'returning', 'returned', 'failed', 'cancelled'] },
+      is_replacement: { $ne: true },
+      is_seeding: { $ne: true },
+    })
+      .select('source total_price payment_method shipping_carrier revenue_account')
+      .lean();
+    const unpaidByAccount = await buildOrderRevenueMap(unpaidOrders);
+    const totalUnpaidAmount = Object.values(unpaidByAccount)
+      .reduce((sum, amount) => sum + Number(amount || 0), 0);
+    const commonUnpaidAmount = unpaidByAccount.common || 0;
+
+    platformBalances.forEach((account) => {
+      account.unpaidAmount = unpaidByAccount[account.platform] || 0;
+    });
+
     res.json({
       success: true,
       data: {
         totalFundBalance,
         platformBalances,
         adminDeposits,
-        totalImportDebt
+        totalImportDebt,
+        totalUnpaidAmount,
+        commonUnpaidAmount
       }
     });
   } catch (error) {

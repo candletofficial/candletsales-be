@@ -8,7 +8,7 @@ function itemMaterials(item, product) {
   return [
     ...(product?.resolved_base_ingredients?.length ? product.resolved_base_ingredients : product?.base_ingredients || []),
     ...(product?.skus?.find(sku => sku.id === item.sku_id)?.extra_ingredients || []),
-  ];
+  ].filter(entry => entry?.suspended !== true);
 }
 
 function materialTotals(entries, quantity = 1) {

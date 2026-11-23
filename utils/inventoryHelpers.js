@@ -13,7 +13,7 @@ const triggerAutoConfirmImports = async () => {
     if (!config || config.value !== true) return;
 
     // Tìm các nguyên vật liệu có actualStock <= 0
-    const outOfStockMaterials = await Material.find({ actualStock: { $lte: 0 } }).select('_id');
+    const outOfStockMaterials = await Material.find({ actualStock: { $lte: 0 }, isTrackingEnabled: { $ne: false } }).select('_id');
     if (outOfStockMaterials.length === 0) return;
 
     const outOfStockIds = outOfStockMaterials.map(m => m._id.toString());

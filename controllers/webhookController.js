@@ -261,7 +261,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
               const baseIngredients = matchedProduct.resolved_base_ingredients?.length ? matchedProduct.resolved_base_ingredients : matchedProduct.base_ingredients;
               if (baseIngredients) {
                 baseIngredients.forEach(bi => {
-                  if (bi.ingredient_id && bi.ingredient_id.price) {
+                  if (bi.suspended !== true && bi.ingredient_id && bi.ingredient_id.price) {
                     base_cost += bi.ingredient_id.price * bi.quantity;
                   }
                 });
@@ -272,7 +272,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
                 if (matchedSku && matchedSku.extra_ingredients) {
                   let extra_cost = 0;
                   matchedSku.extra_ingredients.forEach(ei => {
-                    if (ei.ingredient_id && ei.ingredient_id.price) {
+                    if (ei.suspended !== true && ei.ingredient_id && ei.ingredient_id.price) {
                       extra_cost += ei.ingredient_id.price * ei.quantity;
                     }
                   });
@@ -426,7 +426,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
         const baseIngredients = matchedProduct.resolved_base_ingredients?.length ? matchedProduct.resolved_base_ingredients : matchedProduct.base_ingredients;
         if (baseIngredients) {
           baseIngredients.forEach(item => {
-            if (item.ingredient_id && item.ingredient_id.price) {
+            if (item.suspended !== true && item.ingredient_id && item.ingredient_id.price) {
               base_cost += item.ingredient_id.price * item.quantity;
             }
           });
@@ -439,7 +439,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
           if (matchedSku && matchedSku.extra_ingredients) {
             let extra_cost = 0;
             matchedSku.extra_ingredients.forEach(item => {
-              if (item.ingredient_id && item.ingredient_id.price) {
+              if (item.suspended !== true && item.ingredient_id && item.ingredient_id.price) {
                 extra_cost += item.ingredient_id.price * item.quantity;
               }
             });

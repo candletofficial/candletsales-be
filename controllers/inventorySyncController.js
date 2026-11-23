@@ -8,6 +8,7 @@ exports.syncInventory = async (req, res) => {
     
     // actualStock của dữ liệu cũ có thể chưa tồn tại; khi đó xem như bằng stock.
     const materials = await Material.find({
+      isTrackingEnabled: { $ne: false },
       $expr: {
         $ne: ['$stock', { $ifNull: ['$actualStock', '$stock'] }]
       }

@@ -18,12 +18,20 @@ const revenueAccountForOrder = async order => {
 };
 
 const shouldAutoCollectToCommonFund = (order, revenueAccount) => {
-  if (revenueAccount.startsWith('carrier_')) return false;
+  if (!revenueAccount || revenueAccount.startsWith('carrier_')) return false;
   return revenueAccount === 'common'
     || (order.source === 'pos' && order.payment_method === 'transfer');
 };
 
 const autoCollectionSource = (order, revenueAccount) => revenueAccount === 'common' ? 'common' : order.source;
+
+const isRecognizedOrderRevenue = order => {
+  if (!order || Number(order.total_price || 0) <= 0) return false;
+  if (['cancelled', 'returned'].includes(order.status)) return false;
+  if (['returning', 'returned', 'failed', 'cancelled'].includes(order.delivery_status)) return false;
+  return order.status === 'completed'
+    || (order.payment_method === 'transfer' && order.payment_status === 'paid');
+};
 
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
@@ -450,14 +458,15 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    const revenueAccount = order.status === 'completed' ? await revenueAccountForOrder(order) : null;
+    const recognizesRevenue = isRecognizedOrderRevenue(order);
+    const revenueAccount = recognizesRevenue ? await revenueAccountForOrder(order) : null;
     if (revenueAccount) {
       order.revenue_account = revenueAccount;
       await order.save();
     }
 
     const isAutoFund = shouldAutoCollectToCommonFund(order, revenueAccount);
-    if (isAutoFund && order.total_price > 0) {
+    if (isAutoFund && recognizesRevenue) {
       await FundTransaction.create({
         type: 'revenue_withdrawal',
         amount: order.total_price,
@@ -470,8 +479,8 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    // Ghi nhận doanh thu đơn hàng vào nền tảng (chỉ ghi nhận khi đơn đã hoàn thành/giao thành công)
-    if (order.total_price > 0 && order.status === 'completed') {
+    // Chuyển khoản đã xác nhận được ghi nhận ngay; COD vẫn chờ giao thành công.
+    if (recognizesRevenue) {
       await FundTransaction.create({
         type: 'order_revenue',
         amount: order.total_price,
@@ -907,7 +916,8 @@ exports.updateOrder = async (req, res, next) => {
 
     // Giữ quy tắc thu quỹ cũ; riêng Facebook COD có tài khoản hãng vận chuyển thì không tự thu về quỹ chung.
     const revenueAccount = await revenueAccountForOrder(order);
-    if (order.status === 'completed' && order.revenue_account !== revenueAccount) {
+    const recognizesRevenue = isRecognizedOrderRevenue(order);
+    if (recognizesRevenue && order.revenue_account !== revenueAccount) {
       order.revenue_account = revenueAccount;
       await order.save();
     }
@@ -918,7 +928,7 @@ exports.updateOrder = async (req, res, next) => {
       note: /^Tự động chuyển doanh thu /,
     });
     
-    if (isAutoFund && order.total_price > 0 && (!order.tracking_enabled || order.status === 'completed')) {
+    if (isAutoFund && recognizesRevenue) {
       if (existingAutoTxList.length > 0) {
         const txToUpdate = existingAutoTxList[0];
         txToUpdate.amount = order.total_price;
@@ -950,7 +960,7 @@ exports.updateOrder = async (req, res, next) => {
     }
 
     // Xử lý FundTransaction cho order_revenue
-    if (order.status === 'completed' || !order.status) {
+    if (recognizesRevenue) {
       const existingRevTx = await FundTransaction.findOne({ order_id: order._id, type: 'order_revenue' });
       if (order.total_price > 0) {
         if (existingRevTx) {
@@ -973,6 +983,8 @@ exports.updateOrder = async (req, res, next) => {
       } else if (existingRevTx) {
         await existingRevTx.deleteOne();
       }
+    } else {
+      await FundTransaction.deleteMany({ order_id: order._id, type: 'order_revenue' });
     }
 
     // 6. Kích hoạt trigger auto confirm phiếu nhập (chạy ngầm)
@@ -1312,8 +1324,14 @@ exports.updateDeliveryStatus = async (req, res, next) => {
           ).catch(err => console.error('[updateDeliveryStatus] Lỗi rollback coupon:', err.message));
         }
 
-        // Xoá ghi nhận doanh thu nếu có
-        await FundTransaction.deleteMany({ order_id: order._id, type: 'order_revenue' });
+        // Đảo toàn bộ phần tiền đã ghi nhận sớm của đơn chuyển khoản.
+        await FundTransaction.deleteMany({
+          order_id: order._id,
+          $or: [
+            { type: 'order_revenue' },
+            { type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
+          ],
+        });
       }
 
       order.delivery_status = 'cancelled';
@@ -1359,7 +1377,8 @@ exports.updateDeliveryStatus = async (req, res, next) => {
         }
       }
 
-      // Đơn theo dõi vận chuyển chỉ ghi tiền sau khi giao thành công.
+      // COD được ghi tiền khi giao thành công; chuyển khoản có thể đã được ghi
+      // trước đó và truy vấn existingCollection bên dưới ngăn cộng hai lần.
       const revenueAccount = await revenueAccountForOrder(order);
       const collectToFund = shouldAutoCollectToCommonFund(order, revenueAccount) && order.total_price > 0;
       if (collectToFund) {

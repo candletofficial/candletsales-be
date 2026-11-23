@@ -62,6 +62,14 @@ const materialSchema = new mongoose.Schema({
     },
     description: 'Tồn kho thực tế khi kiểm kho. Mặc định bằng số lượng tồn kho ban đầu.',
   },
+  isTrackingEnabled: {
+    type: Boolean,
+    default: true,
+  },
+  formulaSuspended: {
+    type: Boolean,
+    default: false,
+  },
 }, { timestamps: true });
 
 // Tự động tính toán trạng thái trước khi lưu (chỉ dùng actualStock vs minStock)

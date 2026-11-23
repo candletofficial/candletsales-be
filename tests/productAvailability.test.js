@@ -39,3 +39,10 @@ test('missing recipes remain unknown and missing materials make stock zero', () 
   assert.equal(recipeCapacity([{ ingredient_id: null, quantity: 1 }]), 0);
   assert.equal(enrichProductAvailability({ base_ingredients: [], skus: [] }).stock, null);
 });
+
+test('suspended ingredients do not limit production capacity', () => {
+  assert.equal(recipeCapacity([
+    { ingredient_id: material('wax', 100), quantity: 20 },
+    { ingredient_id: material('paused-oil', 0), quantity: 10, suspended: true },
+  ]), 5);
+});

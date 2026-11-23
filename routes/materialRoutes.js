@@ -18,6 +18,9 @@ router.route('/')
 router.route('/category/:categoryName')
   .delete(materialController.deleteCategory);
 
+router.get('/:id/usage', materialController.getMaterialUsage);
+router.patch('/:id/tracking', materialController.setMaterialTracking);
+
 router.route('/:id')
   .put(materialController.updateMaterial)
   .delete(materialController.deleteMaterial);

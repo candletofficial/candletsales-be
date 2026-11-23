@@ -29,13 +29,20 @@ const getFundAccountIds = async () => {
 
 const resolveOrderRevenueAccount = (order, enabledCarrierIds = DEFAULT_ENABLED_CARRIERS) => {
   const source = order?.source || 'khác';
+
+  // A confirmed bank transfer is already in a real shop account. Website
+  // transfers stay in Website; transfers from every other source go to common.
+  if (order?.payment_method === 'transfer') {
+    return source === 'website' ? 'website' : 'common';
+  }
+
   const storedAccount = String(order?.revenue_account || '');
   if (storedAccount === 'common' || storedAccount.startsWith('carrier_') || BASE_FUND_ACCOUNTS.includes(storedAccount)) {
     return storedAccount;
   }
 
   if (source === 'shopee' || source === 'tiktok') return source;
-  if (source === 'pos') return order?.payment_method === 'transfer' ? 'common' : 'pos';
+  if (source === 'pos') return 'pos';
 
   const carrierId = String(order?.shipping_carrier || '').trim();
   const isCarrierCod = order?.payment_method === 'cash'
@@ -43,7 +50,7 @@ const resolveOrderRevenueAccount = (order, enabledCarrierIds = DEFAULT_ENABLED_C
     && enabledCarrierIds.includes(carrierId);
 
   if (isCarrierCod) return carrierAccountId(carrierId);
-  return source === 'website' && order?.payment_method === 'transfer' ? 'website' : 'common';
+  return 'common';
 };
 
 const buildOrderRevenueMap = async (orders) => {

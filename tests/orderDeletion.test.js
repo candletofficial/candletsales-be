@@ -47,7 +47,7 @@ function setup({ status = 'completed', delivery = 'delivered', failAt, missing =
     assert.deepEqual(filter, {
       order_id: 'order-1', $or: [
         { type: { $in: ['order_revenue', 'seeding_payment', 'shipping_payment'] } },
-        { type: 'revenue_withdrawal', source: { $in: ['pos', 'facebook', 'instagram'] } },
+        { type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
       ],
     });
     if (failAt === 'ledger') throw new Error('Ledger failure');

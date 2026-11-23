@@ -628,7 +628,7 @@ const fetchDashboardData = async (options = {}) => {
     let base_cost = 0;
     const baseList = obj.resolved_base_ingredients?.length ? obj.resolved_base_ingredients : (obj.base_ingredients || []);
     baseList.forEach((item) => {
-      if (item.ingredient_id?.price) {
+      if (item.suspended !== true && item.ingredient_id?.price) {
         base_cost += item.ingredient_id.price * item.quantity;
       }
     });
@@ -637,7 +637,7 @@ const fetchDashboardData = async (options = {}) => {
       obj.skus = obj.skus.map((sku) => {
         let extra_cost = 0;
         (sku.extra_ingredients || []).forEach((item) => {
-          if (item.ingredient_id?.price) {
+          if (item.suspended !== true && item.ingredient_id?.price) {
             extra_cost += item.ingredient_id.price * item.quantity;
           }
         });
@@ -681,14 +681,15 @@ const fetchDashboardData = async (options = {}) => {
     stock: Number((m.stock || 0).toFixed(4)),
     actualStock: Number((m.actualStock || 0).toFixed(4)),
     totalValue: (m.actualStock || 0) * (m.price || 0),
+    isTrackingEnabled: m.isTrackingEnabled !== false,
   }));
 
   const inventorySummary = {
     totalMaterials: materials.length,
     availableInventoryValue,
-    outOfStockCount: materialsWithValue.filter((m) => m.actualStock <= 0).length,
-    lowStockCount: materialsWithValue.filter((m) => m.actualStock > 0 && m.actualStock <= 10).length,
-    lowOrOutMaterials: [...materialsWithValue]
+    outOfStockCount: materialsWithValue.filter((m) => m.isTrackingEnabled && m.actualStock <= 0).length,
+    lowStockCount: materialsWithValue.filter((m) => m.isTrackingEnabled && m.actualStock > 0 && m.actualStock <= 10).length,
+    lowOrOutMaterials: materialsWithValue.filter((m) => m.isTrackingEnabled)
       .filter((m) => m.actualStock <= 10)
       .sort((a, b) => a.actualStock - b.actualStock),
     topValueMaterials: [...materialsWithValue]

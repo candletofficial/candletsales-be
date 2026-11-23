@@ -79,6 +79,17 @@ test('preview combines base and SKU materials per unit and provides a revision',
   assert.equal(res.body.data.revision, req.body.revision);
 });
 
+test('suspended formula ingredients are excluded from order material usage', () => {
+  const product = {
+    base_ingredients: [
+      { ingredient_id: ids.old, quantity: 2, suspended: true },
+      { ingredient_id: ids.next, quantity: 3 },
+    ],
+    skus: [],
+  };
+  assert.deepEqual(itemMaterials({ quantity: 1 }, product), [{ ingredient_id: ids.next, quantity: 3 }]);
+});
+
 test('swap refunds old materials, deducts new quantities, leaves other ingredients and formula unchanged', async () => {
   const { req, materials, product, order, state } = setup();
   const originalRecipe = structuredClone(product);

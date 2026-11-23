@@ -12,6 +12,7 @@ const materialStock = (material) => {
 const recipeCapacity = (entries = []) => {
   const requirements = new Map();
   for (const entry of entries) {
+    if (entry?.suspended === true) continue;
     const required = Number(entry?.quantity);
     if (!Number.isFinite(required) || required <= 0) continue;
     const id = materialId(entry.ingredient_id);

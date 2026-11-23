@@ -4,7 +4,7 @@ const Product = require('../models/Product');
 const number = value => Number(value) || 0;
 
 const ingredientCost = (ingredients = []) => ingredients.reduce((sum, row) => (
-  sum + number(row?.ingredient_id?.price) * number(row?.quantity)
+  row?.suspended === true ? sum : sum + number(row?.ingredient_id?.price) * number(row?.quantity)
 ), 0);
 
 const calculateProductUnitCost = (product, skuId) => {

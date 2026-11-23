@@ -15,6 +15,10 @@ exports.getMaterials = async (req, res, next) => {
     // Tính lại status động dựa trên actualStock và minStock (không dùng giá trị lưu trong DB)
     const result = materials.map((m) => {
       const obj = m.toObject();
+      if (obj.isTrackingEnabled === false) {
+        obj.status = 'untracked';
+        return obj;
+      }
       const actual = Number(obj.actualStock);
       const min = Number(obj.minStock);
       if (actual === 0) obj.status = 'out_of_stock';
@@ -24,6 +28,123 @@ exports.getMaterials = async (req, res, next) => {
     });
 
     res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const materialUsageFilter = materialId => ({
+  $or: [
+    { 'base_ingredients.ingredient_id': materialId },
+    { 'resolved_base_ingredients.ingredient_id': materialId },
+    { 'skus.extra_ingredients.ingredient_id': materialId },
+    { 'base_ingredients.replacement_for': materialId },
+    { 'resolved_base_ingredients.replacement_for': materialId },
+    { 'skus.extra_ingredients.replacement_for': materialId },
+  ],
+});
+
+const ingredientId = entry => String(entry?.ingredient_id?._id || entry?.ingredient_id || '');
+
+const setIngredientSuspended = (entries = [], materialId, suspended) => entries.map(entry => (
+  ingredientId(entry) === String(materialId) ? { ...entry, suspended } : entry
+));
+
+const replacementForId = entry => String(entry?.replacement_for?._id || entry?.replacement_for || '');
+
+const replaceIngredient = (entries = [], oldId, newId) => entries.map(entry => (
+  ingredientId(entry) === String(oldId)
+    ? { ...entry, ingredient_id: newId, suspended: false, replacement_for: oldId }
+    : entry
+));
+
+const restoreIngredient = (entries = [], materialId) => entries.map(entry => {
+  if (replacementForId(entry) === String(materialId)) {
+    return { ...entry, ingredient_id: materialId, suspended: false, replacement_for: null };
+  }
+  return ingredientId(entry) === String(materialId) ? { ...entry, suspended: false } : entry;
+});
+
+exports.__trackingHelpers = { replaceIngredient, restoreIngredient };
+
+const updateProductMaterialReferences = async (materialId, action, replacementId = null) => {
+  const products = await Product.find(materialUsageFilter(materialId));
+  for (const product of products) {
+    const value = product.toObject();
+    const change = action === 'replace'
+      ? entries => replaceIngredient(entries, materialId, replacementId)
+      : action === 'resume'
+        ? entries => restoreIngredient(entries, materialId)
+        : entries => setIngredientSuspended(entries, materialId, true);
+    product.set('base_ingredients', change(value.base_ingredients));
+    product.set('resolved_base_ingredients', change(value.resolved_base_ingredients));
+    product.set('skus', (value.skus || []).map(sku => ({
+      ...sku,
+      extra_ingredients: change(sku.extra_ingredients),
+    })));
+    await product.save();
+  }
+  return products.length;
+};
+
+exports.getMaterialUsage = async (req, res, next) => {
+  try {
+    const material = await Material.findById(req.params.id).lean();
+    if (!material) return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
+    const [products, replacements] = await Promise.all([
+      Product.find(materialUsageFilter(req.params.id)).select('_id productId name product_type').lean(),
+      Material.find({ _id: { $ne: req.params.id }, isTrackingEnabled: { $ne: false } })
+        .select('_id name sku unit category').sort({ name: 1 }).lean(),
+    ]);
+    res.json({ success: true, data: { material, products, replacements } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.setMaterialTracking = async (req, res, next) => {
+  try {
+    const material = await Material.findById(req.params.id);
+    if (!material) return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
+
+    const enabled = req.body.enabled === true || req.body.enabled === 'true';
+    if (enabled) {
+      const affectedProducts = await updateProductMaterialReferences(material._id, 'resume');
+      material.isTrackingEnabled = true;
+      material.formulaSuspended = false;
+      await material.save();
+      return res.json({ success: true, data: material, affectedProducts });
+    }
+
+    const usageCount = await Product.countDocuments(materialUsageFilter(material._id));
+    const action = req.body.formulaAction;
+    if (usageCount > 0 && !['suspend', 'replace'].includes(action)) {
+      return res.status(409).json({
+        success: false,
+        code: 'MATERIAL_IN_FORMULAS',
+        message: 'Nguyên vật liệu đang được dùng trong công thức. Hãy chọn đình chỉ hoặc thay thế.',
+        usageCount,
+      });
+    }
+
+    let replacement = null;
+    if (action === 'replace') {
+      if (!req.body.replacementMaterialId || String(req.body.replacementMaterialId) === String(material._id)) {
+        return res.status(400).json({ success: false, message: 'Vui lòng chọn nguyên vật liệu thay thế hợp lệ' });
+      }
+      replacement = await Material.findOne({ _id: req.body.replacementMaterialId, isTrackingEnabled: { $ne: false } });
+      if (!replacement) {
+        return res.status(400).json({ success: false, message: 'Nguyên vật liệu thay thế không tồn tại hoặc đã tạm ngừng theo dõi' });
+      }
+    }
+
+    const affectedProducts = usageCount > 0
+      ? await updateProductMaterialReferences(material._id, action, replacement?._id)
+      : 0;
+    material.isTrackingEnabled = false;
+    material.formulaSuspended = action === 'suspend' && usageCount > 0;
+    await material.save();
+    res.json({ success: true, data: material, affectedProducts, replacement });
   } catch (error) {
     next(error);
   }
@@ -42,6 +163,8 @@ const calculateStatus = (actualStock, minStock) => {
 exports.createMaterial = async (req, res, next) => {
   try {
     const payload = { ...req.body };
+    delete payload.isTrackingEnabled;
+    delete payload.formulaSuspended;
     payload.isConcentratedOil = payload.isConcentratedOil === true || payload.isConcentratedOil === 'true';
     payload.oilColor = normalizeOilColor(payload.oilColor);
     // Tự động tạo SKU nếu frontend không gửi
@@ -70,6 +193,8 @@ exports.createMaterial = async (req, res, next) => {
 exports.updateMaterial = async (req, res, next) => {
   try {
     const payload = { ...req.body };
+    delete payload.isTrackingEnabled;
+    delete payload.formulaSuspended;
     const currentMaterial = await Material.findById(req.params.id);
     if (!currentMaterial) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy nguyên vật liệu' });
@@ -129,12 +254,7 @@ exports.deleteMaterial = async (req, res, next) => {
     const materialId = req.params.id;
 
     // Kiểm tra xem nguyên liệu có đang được sử dụng trong công thức sản phẩm nào không
-    const usedInProductsCount = await Product.countDocuments({
-      $or: [
-        { 'base_ingredients.ingredient_id': materialId },
-        { 'skus.extra_ingredients.ingredient_id': materialId }
-      ]
-    });
+    const usedInProductsCount = await Product.countDocuments(materialUsageFilter(materialId));
 
     if (usedInProductsCount > 0) {
       return res.status(400).json({ 
