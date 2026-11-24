@@ -1,11 +1,14 @@
 const { v2: cloudinary } = require('cloudinary');
 const path = require('path');
 
-const requiredVariables = [
-  'CLOUDINARY_CLOUD_NAME',
-  'CLOUDINARY_API_KEY',
-  'CLOUDINARY_API_SECRET',
-];
+const DEFAULT_CLOUDINARY_CLOUD_NAME = 'sx1nbyf9';
+const configuredCloudName = String(process.env.CLOUDINARY_CLOUD_NAME || '').trim();
+// Older Render settings used the shop name here. Cloudinary expects the
+// account's technical cloud name, so recover automatically from that typo.
+const cloudName = !configuredCloudName || /^(?:candet|candlet|candletshop)$/i.test(configuredCloudName)
+  ? DEFAULT_CLOUDINARY_CLOUD_NAME
+  : configuredCloudName;
+const requiredVariables = ['CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
 
 const isCloudinaryConfigured = () => requiredVariables.every((key) => Boolean(process.env[key]));
 
@@ -20,7 +23,7 @@ const ensureCloudinaryConfigured = () => {
 
 if (isCloudinaryConfigured()) {
   cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    cloud_name: cloudName,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET,
     secure: true,
@@ -57,7 +60,7 @@ const getCloudinaryPublicId = (fileUrl) => {
     if (url.hostname !== 'res.cloudinary.com') return null;
 
     const parts = url.pathname.split('/').filter(Boolean);
-    if (parts[0] !== process.env.CLOUDINARY_CLOUD_NAME) return null;
+    if (parts[0] !== cloudName) return null;
 
     const uploadIndex = parts.indexOf('upload');
     if (uploadIndex === -1) return null;

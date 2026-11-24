@@ -37,7 +37,7 @@ services:
       - key: MAIL_NOTIFICATION_TO
         sync: false
       - key: CLOUDINARY_CLOUD_NAME
-        sync: false
+        value: sx1nbyf9
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
