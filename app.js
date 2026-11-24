@@ -27,6 +27,7 @@ const postRoutes = require('./routes/postRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const sepayRoutes = require('./routes/sepayRoutes');
 const messengerBotRoutes = require('./routes/messengerBotRoutes');
+const mockupShareRoutes = require('./routes/mockupShareRoutes');
 const app = express();
 
 const configuredOrigins = String(process.env.CLIENT_URL || '')
@@ -93,6 +94,7 @@ app.use('/api/funds', fundRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/messenger-bot', messengerBotRoutes);
+app.use('/api/mockups', mockupShareRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/cart', cartRoutes);
