@@ -48,7 +48,7 @@ test('order lookup only returns an existing tracking path for non-website orders
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.data[0].tracking_path, null);
     assert.equal(res.body.data[0].tracking_token, undefined);
-    assert.equal(res.body.data[1].tracking_path, '/s/ASNFZ4mrze8?v=8');
+    assert.equal(res.body.data[1].tracking_path, '/s/ASNFZ4mrze8?v=10');
     assert.equal(res.body.data[1].tracking_token, undefined);
   } finally {
     mock.restoreAll();

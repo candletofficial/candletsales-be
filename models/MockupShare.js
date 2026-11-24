@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const mockupShareSchema = new mongoose.Schema({
   token: { type: String, required: true, unique: true, index: true },
   label_url: { type: String, required: true, trim: true },
+  preview_url: { type: String, trim: true, default: '' },
   label_file_name: { type: String, trim: true, default: 'Tem custom' },
   finish: { type: String, enum: ['frosted', 'clear', 'amber', 'black'], default: 'frosted' },
   lid: { type: String, enum: ['none', 'gold', 'wood', 'black'], default: 'none' },
