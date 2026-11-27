@@ -75,6 +75,15 @@ const prepareProductPayload = async (input, existing = null) => {
       error.statusCode = 400;
       throw error;
     }
+    if (!existing) {
+      const groupSettings = await Product.findOne({ product_type: 'custom', custom_group: payload.custom_group })
+        .select('custom_discount_type custom_discount_value custom_other_cost').lean();
+      if (groupSettings) {
+        payload.custom_discount_type = groupSettings.custom_discount_type || 'none';
+        payload.custom_discount_value = Number(groupSettings.custom_discount_value) || 0;
+        payload.custom_other_cost = Number(groupSettings.custom_other_cost) || 0;
+      }
+    }
     if (!payload.base_ingredients.length) {
       const error = new Error('Sản phẩm custom phải có ít nhất một nguyên vật liệu.');
       error.statusCode = 400;
@@ -244,6 +253,25 @@ exports.updateShopOrder = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+exports.updateCustomGroupSettings = async (req, res, next) => {
+  try {
+    const group = String(req.body.group || '').trim();
+    if (!group) return res.status(400).json({ success: false, message: 'Tên đơn custom không hợp lệ.' });
+
+    const discountType = ['none', 'percent', 'fixed'].includes(req.body.discount_type) ? req.body.discount_type : 'none';
+    const discountValue = discountType === 'none' ? 0 : Math.max(0, Number(req.body.discount_value) || 0);
+    if (discountType === 'percent' && discountValue > 100) {
+      return res.status(400).json({ success: false, message: 'Mức giảm theo phần trăm không được vượt quá 100%.' });
+    }
+    const otherCost = Math.max(0, Number(req.body.other_cost) || 0);
+    const result = await Product.updateMany({ product_type: 'custom', custom_group: group }, {
+      $set: { custom_discount_type: discountType, custom_discount_value: discountValue, custom_other_cost: otherCost },
+    });
+    if (!result.matchedCount) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn custom.' });
+    res.status(200).json({ success: true, data: { group, discount_type: discountType, discount_value: discountValue, other_cost: otherCost } });
+  } catch (error) { next(error); }
 };
 
 exports.updateProduct = async (req, res, next) => {

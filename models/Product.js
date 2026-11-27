@@ -22,6 +22,9 @@ const productSchema = new mongoose.Schema({
     default: 1,
     description: 'Số lượng sản phẩm mặc định trong nhóm custom.',
   },
+  custom_discount_type: { type: String, enum: ['none', 'percent', 'fixed'], default: 'none' },
+  custom_discount_value: { type: Number, min: 0, default: 0 },
+  custom_other_cost: { type: Number, min: 0, default: 0 },
   batch_yield: {
     type: Number,
     default: 1,

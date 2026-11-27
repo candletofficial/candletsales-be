@@ -9,6 +9,7 @@ router.use(protect, adminOnly);
 router.get('/', productController.getProducts);
 router.post('/', productController.createProduct);
 router.put('/shop-order', productController.updateShopOrder);
+router.put('/custom-group-settings', productController.updateCustomGroupSettings);
 router.put('/:id', productController.updateProduct);
 router.delete('/:id', productController.deleteProduct);
 
