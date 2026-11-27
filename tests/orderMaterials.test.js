@@ -6,7 +6,7 @@ const Product = require('../models/Product');
 const Material = require('../models/Material');
 const ShippingConfig = require('../models/ShippingConfig');
 const { itemMaterials, materialsRevision, materialDifference, preserveOrderMaterials } = require('../utils/orderItemMaterials');
-const { buildMaterialDeductions } = require('../controllers/orderController');
+const { buildMaterialDeductions, orderRevenueAmount } = require('../controllers/orderController');
 const { getItemMaterials, updateItemMaterials } = require('../controllers/orderMaterialsController');
 
 afterEach(() => mock.restoreAll());
@@ -152,6 +152,12 @@ test('custom order products do not deduct standard packing materials or packing 
   assert.deepEqual([...result.deductions], [[ids.old, 6]]);
   assert.equal(result.packagingCost, 0);
   assert.equal(shippingConfigQueried, false);
+});
+
+test('custom order other cost is deducted from the revenue credited to assets', () => {
+  assert.equal(orderRevenueAmount({ total_price: 1840000, custom_group: 'CT Hà Thu', custom_other_cost: 10000 }), 1830000);
+  assert.equal(orderRevenueAmount({ total_price: 5000, custom_group: 'CT Hà Thu', custom_other_cost: 10000 }), 0);
+  assert.equal(orderRevenueAmount({ total_price: 1840000, custom_other_cost: 10000 }), 1840000);
 });
 
 test('a second swap uses the first saved recipe and a repeated request is rejected', async () => {

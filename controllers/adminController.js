@@ -397,27 +397,27 @@ exports.getDashboardStats = async (req, res) => {
     const normalCompletedPrev = activePrev.filter(o => !o.is_replacement && !o.is_seeding);
 
     const currentCOGS = normalCompletedCurrent.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0));
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0);
     }, 0);
     const prevCOGS = normalCompletedPrev.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0));
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0);
     }, 0);
 
     const currentLogistics = normalCompletedCurrent.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
     const prevLogistics = normalCompletedPrev.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
 
     const currentReplacementCost = replacementCurrent.reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0) + (o.logistics_cost || 0);
     }, 0);
     const prevReplacementCost = activePrev.filter(o => o.is_replacement).reduce((sum, o) => {
-      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0);
+      return sum + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0) + (o.logistics_cost || 0);
     }, 0);
 
     const currentSeedingCost = seedingCurrent.reduce((sum, o) => {
-      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0);
+      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0) + (o.logistics_cost || 0);
     }, 0);
     const prevSeedingCost = activePrev.filter(o => o.is_seeding).reduce((sum, o) => {
-      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0);
+      return sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((itemSum, item) => itemSum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0) + (o.logistics_cost || 0);
     }, 0);
     const seedingCostGrowth = prevSeedingCost === 0 ? null : ((currentSeedingCost - prevSeedingCost) / prevSeedingCost * 100);
 
@@ -445,7 +445,7 @@ exports.getDashboardStats = async (req, res) => {
           if (!o.is_replacement && !o.is_seeding) {
             chartDataMap[dateKey].revenue += (o.total_price || 0);
           }
-          const cogs = (o.items || []).reduce((sum, item) => sum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0));
+          const cogs = (o.items || []).reduce((sum, item) => sum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.custom_group ? (o.custom_other_cost || 0) : 0);
           const logistics = (o.logistics_cost || 0);
           chartDataMap[dateKey].cogs += cogs;
           chartDataMap[dateKey].cost += cogs + logistics + (o.seeding_cost || 0);

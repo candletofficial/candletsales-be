@@ -25,12 +25,29 @@ const shouldAutoCollectToCommonFund = (order, revenueAccount) => {
 
 const autoCollectionSource = (order, revenueAccount) => revenueAccount === 'common' ? 'common' : order.source;
 
+const orderRevenueAmount = order => Math.max(
+  0,
+  Number(order?.total_price || 0) - (order?.custom_group ? Number(order?.custom_other_cost || 0) : 0),
+);
+
 const isRecognizedOrderRevenue = order => {
-  if (!order || Number(order.total_price || 0) <= 0) return false;
+  if (!order || orderRevenueAmount(order) <= 0) return false;
   if (['cancelled', 'returned'].includes(order.status)) return false;
   if (['returning', 'returned', 'failed', 'cancelled'].includes(order.delivery_status)) return false;
   return order.status === 'completed'
     || (order.payment_method === 'transfer' && order.payment_status === 'paid');
+};
+
+const resolveCustomOtherCost = async (customGroup, items = []) => {
+  const group = typeof customGroup === 'string' ? customGroup.trim() : '';
+  const productIds = items.map(item => materialId(item.product_id)).filter(Boolean);
+  if (!group || !productIds.length) return 0;
+  const template = await Product.findOne({
+    _id: { $in: productIds },
+    product_type: 'custom',
+    custom_group: group,
+  }).select('custom_other_cost').lean();
+  return Math.max(0, Number(template?.custom_other_cost) || 0);
 };
 
 // Helper tạo orderId ngẫu nhiên
@@ -400,6 +417,9 @@ exports.createOrder = async (req, res, next) => {
       ? orderId.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
       : undefined;
 
+    const normalizedCustomGroup = typeof custom_group === 'string' ? custom_group.trim() : '';
+    const customOtherCost = await resolveCustomOtherCost(normalizedCustomGroup, items);
+
     // 2. Tạo đơn hàng
     const order = await Order.create({
       orderId,
@@ -416,7 +436,8 @@ exports.createOrder = async (req, res, next) => {
       customer_name: customer_name || '',
       customer_phone: customer_phone || '',
       customer_address: customer_address || '',
-      custom_group: typeof custom_group === 'string' ? custom_group.trim() : '',
+      custom_group: normalizedCustomGroup,
+      custom_other_cost: customOtherCost,
       user_id: user_id || null,
       payment_method: payment_method || 'cash',
       payment_status: isPaidPayment ? 'paid' : 'pending',
@@ -463,6 +484,7 @@ exports.createOrder = async (req, res, next) => {
     }
 
     const recognizesRevenue = isRecognizedOrderRevenue(order);
+    const revenueAmount = orderRevenueAmount(order);
     const revenueAccount = recognizesRevenue ? await revenueAccountForOrder(order) : null;
     if (revenueAccount) {
       order.revenue_account = revenueAccount;
@@ -473,9 +495,9 @@ exports.createOrder = async (req, res, next) => {
     if (isAutoFund && recognizesRevenue) {
       await FundTransaction.create({
         type: 'revenue_withdrawal',
-        amount: order.total_price,
+        amount: revenueAmount,
         fee: 0,
-        fund_change: order.total_price,
+        fund_change: revenueAmount,
         source: autoCollectionSource(order, revenueAccount),
         order_id: order._id,
         note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
@@ -487,9 +509,9 @@ exports.createOrder = async (req, res, next) => {
     if (recognizesRevenue) {
       await FundTransaction.create({
         type: 'order_revenue',
-        amount: order.total_price,
+        amount: revenueAmount,
         fund_change: 0,
-        platform_change: order.total_price,
+        platform_change: revenueAmount,
         source: revenueAccount,
         order_id: order._id,
         note: `Doanh thu đơn hàng ${order.orderId}`,
@@ -735,6 +757,9 @@ exports.updateOrder = async (req, res, next) => {
       console.error('[updateOrder] Lỗi khi cập nhật nguyên liệu:', deductErr.message);
     }
 
+    const resultingCustomGroup = typeof custom_group === 'string' ? custom_group.trim() : oldOrder.custom_group;
+    const customOtherCost = await resolveCustomOtherCost(resultingCustomGroup, items);
+
     // 5. Cập nhật dữ liệu đơn hàng
     const updateData = { 
       items: items || [], 
@@ -746,7 +771,8 @@ exports.updateOrder = async (req, res, next) => {
       customer_name, 
       customer_phone, 
       customer_address, 
-      custom_group: typeof custom_group === 'string' ? custom_group.trim() : oldOrder.custom_group,
+      custom_group: resultingCustomGroup,
+      custom_other_cost: customOtherCost,
       payment_method, 
       shippingMethod, 
       shipping_carrier: typeof shipping_carrier === 'string' ? shipping_carrier.trim() : oldOrder.shipping_carrier,
@@ -922,6 +948,7 @@ exports.updateOrder = async (req, res, next) => {
     // Giữ quy tắc thu quỹ cũ; riêng Facebook COD có tài khoản hãng vận chuyển thì không tự thu về quỹ chung.
     const revenueAccount = await revenueAccountForOrder(order);
     const recognizesRevenue = isRecognizedOrderRevenue(order);
+    const revenueAmount = orderRevenueAmount(order);
     if (recognizesRevenue && order.revenue_account !== revenueAccount) {
       order.revenue_account = revenueAccount;
       await order.save();
@@ -936,8 +963,8 @@ exports.updateOrder = async (req, res, next) => {
     if (isAutoFund && recognizesRevenue) {
       if (existingAutoTxList.length > 0) {
         const txToUpdate = existingAutoTxList[0];
-        txToUpdate.amount = order.total_price;
-        txToUpdate.fund_change = order.total_price;
+        txToUpdate.amount = revenueAmount;
+        txToUpdate.fund_change = revenueAmount;
         txToUpdate.source = autoCollectionSource(order, revenueAccount);
         txToUpdate.note = `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`;
         await txToUpdate.save();
@@ -949,9 +976,9 @@ exports.updateOrder = async (req, res, next) => {
       } else {
         await FundTransaction.create({
           type: 'revenue_withdrawal',
-          amount: order.total_price,
+          amount: revenueAmount,
           fee: 0,
-          fund_change: order.total_price,
+          fund_change: revenueAmount,
           source: autoCollectionSource(order, revenueAccount),
           order_id: order._id,
           note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
@@ -967,18 +994,18 @@ exports.updateOrder = async (req, res, next) => {
     // Xử lý FundTransaction cho order_revenue
     if (recognizesRevenue) {
       const existingRevTx = await FundTransaction.findOne({ order_id: order._id, type: 'order_revenue' });
-      if (order.total_price > 0) {
+      if (revenueAmount > 0) {
         if (existingRevTx) {
-          existingRevTx.amount = order.total_price;
-          existingRevTx.platform_change = order.total_price;
+          existingRevTx.amount = revenueAmount;
+          existingRevTx.platform_change = revenueAmount;
           existingRevTx.source = revenueAccount;
           await existingRevTx.save();
         } else {
           await FundTransaction.create({
             type: 'order_revenue',
-            amount: order.total_price,
+            amount: revenueAmount,
             fund_change: 0,
-            platform_change: order.total_price,
+            platform_change: revenueAmount,
             source: revenueAccount,
             order_id: order._id,
             note: `Doanh thu đơn hàng ${order.orderId}`,
@@ -1207,6 +1234,7 @@ exports.markAsReturned = async (req, res, next) => {
 };
 
 exports.buildMaterialDeductions = buildMaterialDeductions;
+exports.orderRevenueAmount = orderRevenueAmount;
 
 // PATCH /api/orders/:id/delivery-status
 exports.updateDeliveryStatus = async (req, res, next) => {
@@ -1358,22 +1386,23 @@ exports.updateDeliveryStatus = async (req, res, next) => {
       order.status = 'completed';
       order.revenue_account = await revenueAccountForOrder(order);
       await order.save();
+      const revenueAmount = orderRevenueAmount(order);
 
       // Ghi nhận doanh thu nền tảng nếu chưa có
-      if (order.total_price > 0) {
+      if (revenueAmount > 0) {
         const revenueAccount = await revenueAccountForOrder(order);
         const existingRevTx = await FundTransaction.findOne({ order_id: order._id, type: 'order_revenue' });
         if (existingRevTx) {
-          existingRevTx.amount = order.total_price;
-          existingRevTx.platform_change = order.total_price;
+          existingRevTx.amount = revenueAmount;
+          existingRevTx.platform_change = revenueAmount;
           existingRevTx.source = revenueAccount;
           await existingRevTx.save();
         } else {
           await FundTransaction.create({
             type: 'order_revenue',
-            amount: order.total_price,
+            amount: revenueAmount,
             fund_change: 0,
-            platform_change: order.total_price,
+            platform_change: revenueAmount,
             source: revenueAccount,
             order_id: order._id,
             note: `Doanh thu đơn hàng ${order.orderId} (Giao thành công)`,
@@ -1385,7 +1414,7 @@ exports.updateDeliveryStatus = async (req, res, next) => {
       // COD được ghi tiền khi giao thành công; chuyển khoản có thể đã được ghi
       // trước đó và truy vấn existingCollection bên dưới ngăn cộng hai lần.
       const revenueAccount = await revenueAccountForOrder(order);
-      const collectToFund = shouldAutoCollectToCommonFund(order, revenueAccount) && order.total_price > 0;
+      const collectToFund = shouldAutoCollectToCommonFund(order, revenueAccount) && revenueAmount > 0;
       if (collectToFund) {
         const existingCollection = await FundTransaction.findOne({
           order_id: order._id,
@@ -1393,8 +1422,8 @@ exports.updateDeliveryStatus = async (req, res, next) => {
           note: /^Tự động chuyển doanh thu /,
         });
         if (!existingCollection) await FundTransaction.create({
-          type: 'revenue_withdrawal', amount: order.total_price, fee: 0,
-          fund_change: order.total_price, source: autoCollectionSource(order, revenueAccount), order_id: order._id,
+          type: 'revenue_withdrawal', amount: revenueAmount, fee: 0,
+          fund_change: revenueAmount, source: autoCollectionSource(order, revenueAccount), order_id: order._id,
           note: `Tự động chuyển doanh thu đơn ${order.orderId} vào tài sản chung`,
           created_by: req.user?.username || 'Admin',
         });

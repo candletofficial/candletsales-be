@@ -57,7 +57,8 @@ const buildOrderRevenueMap = async (orders) => {
   const enabledCarrierIds = await getEnabledCarrierIds();
   return orders.reduce((map, order) => {
     const account = resolveOrderRevenueAccount(order, enabledCarrierIds);
-    map[account] = (map[account] || 0) + Number(order.total_price || 0);
+    const customOtherCost = order.custom_group ? Number(order.custom_other_cost || 0) : 0;
+    map[account] = (map[account] || 0) + Math.max(0, Number(order.total_price || 0) - customOtherCost);
     return map;
   }, {});
 };
