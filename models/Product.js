@@ -16,6 +16,12 @@ const productSchema = new mongoose.Schema({
     index: true,
     description: 'Nhóm đại diện cho một đơn/dự án custom của khách hàng.',
   },
+  custom_quantity: {
+    type: Number,
+    min: 1,
+    default: 1,
+    description: 'Số lượng sản phẩm mặc định trong nhóm custom.',
+  },
   batch_yield: {
     type: Number,
     default: 1,

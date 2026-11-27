@@ -69,6 +69,7 @@ const prepareProductPayload = async (input, existing = null) => {
 
   if (payload.product_type === 'custom') {
     payload.custom_group = String(payload.custom_group || '').trim();
+    payload.custom_quantity = Math.max(1, Math.trunc(Number(payload.custom_quantity) || 1));
     if (!payload.custom_group) {
       const error = new Error('Sản phẩm custom phải thuộc một nhóm đơn custom.');
       error.statusCode = 400;
@@ -91,6 +92,7 @@ const prepareProductPayload = async (input, existing = null) => {
 
   payload.batch_yield = 1;
   payload.custom_group = '';
+  payload.custom_quantity = 1;
 
   const components = Array.isArray(payload.formula_components) ? payload.formula_components : [];
   const normalizedComponents = [];
