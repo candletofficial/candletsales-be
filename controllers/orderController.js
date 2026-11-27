@@ -50,6 +50,47 @@ const resolveCustomOtherCost = async (customGroup, items = []) => {
   return Math.max(0, Number(template?.custom_other_cost) || 0);
 };
 
+// Orders created before custom_other_cost existed need a one-time snapshot
+// from their custom group. Updating the related ledger rows keeps assets in
+// sync with the same net-revenue rule used for new orders.
+const backfillLegacyCustomOtherCosts = async (orders = []) => {
+  const ids = orders.map(order => order?._id).filter(Boolean);
+  if (!ids.length) return;
+  const legacyOrders = await Order.collection.find({
+    _id: { $in: ids },
+    custom_group: { $nin: ['', null] },
+    custom_other_cost: { $exists: false },
+  }).project({ _id: 1, custom_group: 1, total_price: 1 }).toArray();
+  if (!legacyOrders.length) return;
+
+  const groups = [...new Set(legacyOrders.map(order => order.custom_group).filter(Boolean))];
+  const templates = await Product.find({ product_type: 'custom', custom_group: { $in: groups } })
+    .select('custom_group custom_other_cost').lean();
+  const costsByGroup = new Map();
+  for (const template of templates) {
+    if (!costsByGroup.has(template.custom_group)) {
+      costsByGroup.set(template.custom_group, Math.max(0, Number(template.custom_other_cost) || 0));
+    }
+  }
+
+  const documentsById = new Map(orders.map(order => [String(order._id), order]));
+  for (const legacy of legacyOrders) {
+    const customOtherCost = costsByGroup.get(legacy.custom_group) || 0;
+    const revenueAmount = Math.max(0, Number(legacy.total_price || 0) - customOtherCost);
+    await Order.updateOne({ _id: legacy._id }, { $set: { custom_other_cost: customOtherCost } });
+    await FundTransaction.updateMany(
+      { order_id: legacy._id, type: 'order_revenue' },
+      { $set: { amount: revenueAmount, platform_change: revenueAmount } },
+    );
+    await FundTransaction.updateMany(
+      { order_id: legacy._id, type: 'revenue_withdrawal', note: /^Tự động chuyển doanh thu / },
+      { $set: { amount: revenueAmount, fund_change: revenueAmount } },
+    );
+    const document = documentsById.get(String(legacy._id));
+    if (document) document.custom_other_cost = customOtherCost;
+  }
+};
+
 // Helper tạo orderId ngẫu nhiên
 const generateOrderId = () => `DH-${Math.floor(1000000 + Math.random() * 9000000)}`;
 
@@ -239,6 +280,7 @@ exports.createConfirmedTransferOrder = async (session, transactionId) => {
 exports.getOrders = async (req, res, next) => {
   try {
     const orders = await Order.find().select('+tracking_token').sort({ ordered_at: -1 });
+    await backfillLegacyCustomOtherCosts(orders);
     res.status(200).json({ success: true, data: orders });
   } catch (error) {
     next(error);
@@ -252,6 +294,7 @@ exports.getOrder = async (req, res, next) => {
     if (!order) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
+    await backfillLegacyCustomOtherCosts([order]);
     res.status(200).json({ success: true, data: order });
   } catch (error) {
     next(error);
