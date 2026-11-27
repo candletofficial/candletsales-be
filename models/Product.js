@@ -5,9 +5,16 @@ const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   product_type: {
     type: String,
-    enum: ['sellable', 'sub_formula'],
+    enum: ['sellable', 'sub_formula', 'custom'],
     default: 'sellable',
     index: true,
+  },
+  custom_group: {
+    type: String,
+    trim: true,
+    default: '',
+    index: true,
+    description: 'Nhóm đại diện cho một đơn/dự án custom của khách hàng.',
   },
   batch_yield: {
     type: Number,

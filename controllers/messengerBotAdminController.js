@@ -104,7 +104,7 @@ exports.updateKnowledge = async (req, res, next) => {
 exports.getProductProfiles = async (req, res, next) => {
   try {
     const [products, profiles] = await Promise.all([
-      Product.find({ product_type: { $ne: 'sub_formula' } }).select('productId name image description base_price scent_group category volume').sort({ name: 1 }).lean(),
+      Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).select('productId name image description base_price scent_group category volume').sort({ name: 1 }).lean(),
       MessengerProductProfile.find().lean(),
     ]);
     const byProduct = new Map(profiles.map((profile) => [String(profile.product), profile]));

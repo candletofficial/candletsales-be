@@ -245,7 +245,7 @@ exports.createOrder = async (req, res, next) => {
     if (createTracking && req.user?.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Chỉ quản trị viên được tạo link theo dõi.' });
     }
-    let { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, user_id, payment_method, shippingMethod, shipping_carrier, tracking_number, tracking_url, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
+    let { items, total_price, logistics_cost, shipping_fee, source, pos_mode, customer_name, customer_phone, customer_address, custom_group, user_id, payment_method, shippingMethod, shipping_carrier, tracking_number, tracking_url, note, ordered_at, orderId: clientOrderId, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code } = req.body;
     if (Array.isArray(items)) items = preserveOrderMaterials(items);
     req.body.items = items;
 
@@ -325,7 +325,7 @@ exports.createOrder = async (req, res, next) => {
           return res.status(400).json({ success: false, message: 'Mã freeship áp dụng cho đơn website có phí vận chuyển.' });
         }
         if (!req.internalPaymentConfirmation) {
-          const products = await Product.find({ _id: { $in: items.map(item => item.product_id) }, product_type: { $ne: 'sub_formula' } });
+          const products = await Product.find({ _id: { $in: items.map(item => item.product_id) }, product_type: { $nin: ['sub_formula', 'custom'] } });
           items = items.map(item => {
             const product = products.find(p => String(p._id) === String(item.product_id));
             const sku = product?.skus?.find(s => s.id === item.sku_id);
@@ -413,6 +413,7 @@ exports.createOrder = async (req, res, next) => {
       customer_name: customer_name || '',
       customer_phone: customer_phone || '',
       customer_address: customer_address || '',
+      custom_group: typeof custom_group === 'string' ? custom_group.trim() : '',
       user_id: user_id || null,
       payment_method: payment_method || 'cash',
       payment_status: isPaidPayment ? 'paid' : 'pending',
@@ -545,7 +546,7 @@ exports.createOrder = async (req, res, next) => {
 // PUT /api/orders/:id
 exports.updateOrder = async (req, res, next) => {
   try {
-    let { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, payment_method, shippingMethod, shipping_carrier, tracking_number, tracking_url, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code, delivery_status, status } = req.body;
+    let { items, total_price, logistics_cost, source, pos_mode, customer_name, customer_phone, customer_address, custom_group, payment_method, shippingMethod, shipping_carrier, tracking_number, tracking_url, note, ordered_at, is_replacement, is_seeding, seeding_cost, discount_amount, discount_code, delivery_status, status } = req.body;
 
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
@@ -742,6 +743,7 @@ exports.updateOrder = async (req, res, next) => {
       customer_name, 
       customer_phone, 
       customer_address, 
+      custom_group: typeof custom_group === 'string' ? custom_group.trim() : oldOrder.custom_group,
       payment_method, 
       shippingMethod, 
       shipping_carrier: typeof shipping_carrier === 'string' ? shipping_carrier.trim() : oldOrder.shipping_carrier,

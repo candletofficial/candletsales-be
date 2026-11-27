@@ -71,6 +71,7 @@ const orderSchema = new mongoose.Schema({
   customer_name: { type: String, default: '' },
   customer_phone: { type: String, default: '' },
   customer_address: { type: String, default: '' },
+  custom_group: { type: String, trim: true, default: '' },
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   payment_method: {
     type: String,

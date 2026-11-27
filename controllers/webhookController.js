@@ -252,7 +252,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       // If unit_cost is 0 for any item, we should try to recalculate it
       const hasZeroCost = existingOrder.items.some(i => !i.unit_cost || i.unit_cost === 0);
       if (hasZeroCost) {
-        const allProducts = await Product.find({ product_type: { $ne: 'sub_formula' } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+        const allProducts = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
         for (let item of existingOrder.items) {
           if (!item.unit_cost || item.unit_cost === 0) {
             let matchedProduct = allProducts.find(p => p._id.toString() === item.product_id?.toString());
@@ -304,7 +304,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       return res.status(200).json({ success: true, message: 'Ignored: Full order payload required for creation' });
     }
 
-    const allProducts = await Product.find({ product_type: { $ne: 'sub_formula' } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+    const allProducts = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
     const orderItems = [];
 
     // Map Pancake items to our Products

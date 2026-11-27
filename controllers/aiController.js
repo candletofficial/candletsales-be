@@ -647,7 +647,7 @@ const fetchDashboardData = async (options = {}) => {
     return enrichProductAvailability(obj);
   });
 
-  const sellableProducts = enrichedProducts.filter((p) => p.product_type !== 'sub_formula');
+  const sellableProducts = enrichedProducts.filter((p) => !['sub_formula', 'custom'].includes(p.product_type));
   const subFormulas = enrichedProducts.filter((p) => p.product_type === 'sub_formula');
   const catalogSummary = {
     totalSellable: sellableProducts.length,

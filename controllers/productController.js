@@ -53,7 +53,7 @@ const prepareProductPayload = async (input, existing = null) => {
   delete payload.updatedAt;
   delete payload.resolved_base_ingredients;
 
-  payload.product_type = payload.product_type === 'sub_formula' ? 'sub_formula' : 'sellable';
+  payload.product_type = ['sub_formula', 'custom'].includes(payload.product_type) ? payload.product_type : 'sellable';
   payload.base_ingredients = mergeIngredients(payload.base_ingredients);
   if (payload.product_type === 'sub_formula') {
     payload.batch_yield = Math.max(1, Math.trunc(Number(payload.batch_yield) || 1));
@@ -67,7 +67,30 @@ const prepareProductPayload = async (input, existing = null) => {
     return applyMaterialSuspensions(payload);
   }
 
+  if (payload.product_type === 'custom') {
+    payload.custom_group = String(payload.custom_group || '').trim();
+    if (!payload.custom_group) {
+      const error = new Error('Sản phẩm custom phải thuộc một nhóm đơn custom.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!payload.base_ingredients.length) {
+      const error = new Error('Sản phẩm custom phải có ít nhất một nguyên vật liệu.');
+      error.statusCode = 400;
+      throw error;
+    }
+    payload.batch_yield = 1;
+    payload.shop_order = null;
+    payload.category = 'Sản phẩm custom';
+    payload.variant_groups = [];
+    payload.skus = [];
+    payload.formula_components = [];
+    payload.resolved_base_ingredients = payload.base_ingredients;
+    return applyMaterialSuspensions(payload);
+  }
+
   payload.batch_yield = 1;
+  payload.custom_group = '';
 
   const components = Array.isArray(payload.formula_components) ? payload.formula_components : [];
   const normalizedComponents = [];
@@ -134,8 +157,9 @@ const refreshDependentProducts = async formulaIdValue => {
 // Lấy danh sách sản phẩm và tự động tính toán BOM Cost
 exports.getProducts = async (req, res, next) => {
   try {
-    const filter = req.query.type === 'sellable' ? { product_type: { $ne: 'sub_formula' } }
-      : req.query.type === 'sub_formula' ? { product_type: 'sub_formula' } : {};
+    const filter = req.query.type === 'sellable' ? { product_type: { $nin: ['sub_formula', 'custom'] } }
+      : req.query.type === 'sub_formula' ? { product_type: 'sub_formula' }
+        : req.query.type === 'custom' ? { product_type: 'custom' } : {};
     const products = await Product.find(filter)
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
@@ -202,7 +226,7 @@ exports.updateShopOrder = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Danh sách sắp xếp sản phẩm không hợp lệ' });
     }
 
-    const existingCount = await Product.countDocuments({ _id: { $in: uniqueIds }, product_type: { $ne: 'sub_formula' } });
+    const existingCount = await Product.countDocuments({ _id: { $in: uniqueIds }, product_type: { $nin: ['sub_formula', 'custom'] } });
     if (existingCount !== uniqueIds.length) {
       return res.status(400).json({ success: false, message: 'Có sản phẩm không còn tồn tại trong danh sách' });
     }
