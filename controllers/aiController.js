@@ -383,11 +383,11 @@ const fetchDashboardData = async (options = {}) => {
   const normalCompletedPrev = activePrev.filter((o) => !o.is_replacement && !o.is_seeding);
 
   const currentCOGS = normalCompletedCurrent.reduce(
-    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0),
+    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)),
     0
   );
   const prevCOGS = normalCompletedPrev.reduce(
-    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0),
+    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)),
     0
   );
 
@@ -395,20 +395,20 @@ const fetchDashboardData = async (options = {}) => {
   const prevLogistics = normalCompletedPrev.reduce((sum, o) => sum + (o.logistics_cost || 0), 0);
 
   const currentReplacementCost = replacementCurrent.reduce(
-    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0),
+    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0),
     0
   );
   const prevReplacementCost = activePrev.filter((o) => o.is_replacement).reduce(
-    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0),
+    (sum, o) => sum + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0),
     0
   );
 
   const currentSeedingCost = seedingCurrent.reduce(
-    (sum, o) => sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0),
+    (sum, o) => sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0),
     0
   );
   const prevSeedingCost = activePrev.filter((o) => o.is_seeding).reduce(
-    (sum, o) => sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0) + (o.logistics_cost || 0),
+    (sum, o) => sum + (o.seeding_cost || 0) - (o.total_price || 0) + (o.items || []).reduce((s, item) => s + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0)) + (o.logistics_cost || 0),
     0
   );
   const seedingCostGrowth = prevSeedingCost === 0 ? null : Number((((currentSeedingCost - prevSeedingCost) / prevSeedingCost) * 100).toFixed(1));
@@ -436,7 +436,7 @@ const fetchDashboardData = async (options = {}) => {
         if (!o.is_replacement && !o.is_seeding) {
           chartDataMap[dateKey].revenue += (o.total_price || 0);
         }
-        const cogs = (o.items || []).reduce((sum, item) => sum + (unitCostFor(item) * item.quantity), 0) + (o.packaging_cost || 0);
+        const cogs = (o.items || []).reduce((sum, item) => sum + (unitCostFor(item) * item.quantity), 0) + (o.custom_group ? 0 : (o.packaging_cost || 0));
         const logistics = (o.logistics_cost || 0);
         chartDataMap[dateKey].cogs += cogs;
         chartDataMap[dateKey].cost += cogs + logistics + (o.seeding_cost || 0);

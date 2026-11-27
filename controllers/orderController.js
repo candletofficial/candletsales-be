@@ -55,6 +55,7 @@ const buildMaterialDeductions = async (items, shippingMethod = 'standard', sessi
   const productQuery = Product.find({ _id: { $in: productIds } });
   const products = await (session ? productQuery.session(session) : productQuery);
   const productMap = Object.fromEntries(products.map(p => [p._id.toString(), p]));
+  const hasCustomProduct = products.some(product => product.product_type === 'custom');
 
   // Map: materialId -> tổng lượng cần trừ
   const deductions = new Map();
@@ -82,7 +83,9 @@ const buildMaterialDeductions = async (items, shippingMethod = 'standard', sessi
 
   // 3. Trừ thêm nguyên liệu theo phương thức vận chuyển
   let packagingCost = 0;
-  if (shippingMethod) {
+  // Custom orders are production estimates and use their own complete recipe.
+  // Do not add the store's standard packing materials or packing cost.
+  if (shippingMethod && !hasCustomProduct) {
     const shippingQuery = ShippingConfig.findOne({ method: shippingMethod });
     const shippingConfig = await (session ? shippingQuery.session(session) : shippingQuery);
     if (shippingConfig && shippingConfig.materials && shippingConfig.materials.length > 0) {

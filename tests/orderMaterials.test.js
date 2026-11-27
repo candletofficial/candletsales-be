@@ -133,6 +133,27 @@ test('later quantity changes, returns and deletes resolve the saved recipe, not 
   assert.deepEqual([...updated.deductions], [[ids.next, 9], [ids.extra, 3]]);
 });
 
+test('custom order products do not deduct standard packing materials or packing cost', async () => {
+  const customProduct = {
+    _id: ids.product,
+    product_type: 'custom',
+    base_ingredients: [{ ingredient_id: ids.old, quantity: 2 }],
+    skus: [],
+  };
+  let shippingConfigQueried = false;
+  mock.method(Product, 'find', () => query([customProduct]));
+  mock.method(ShippingConfig, 'findOne', () => {
+    shippingConfigQueried = true;
+    return query({ materials: [{ material_id: ids.extra, quantity: 1 }] });
+  });
+
+  const result = await buildMaterialDeductions([{ product_id: ids.product, quantity: 3 }], 'standard');
+
+  assert.deepEqual([...result.deductions], [[ids.old, 6]]);
+  assert.equal(result.packagingCost, 0);
+  assert.equal(shippingConfigQueried, false);
+});
+
 test('a second swap uses the first saved recipe and a repeated request is rejected', async () => {
   const { req, materials, product, order, state } = setup();
   assert.ifError((await update(req)).error);
