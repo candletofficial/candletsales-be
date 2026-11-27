@@ -33,7 +33,12 @@ exports.getMaterials = async (req, res, next) => {
   }
 };
 
+// Custom products are calculation templates. They must not participate in the
+// lifecycle of a live product formula (suspend, replace, resume or delete
+// protection). Their materials become operational only after the custom group
+// is added to an actual order.
 const materialUsageFilter = materialId => ({
+  product_type: { $ne: 'custom' },
   $or: [
     { 'base_ingredients.ingredient_id': materialId },
     { 'resolved_base_ingredients.ingredient_id': materialId },
@@ -65,7 +70,7 @@ const restoreIngredient = (entries = [], materialId) => entries.map(entry => {
   return ingredientId(entry) === String(materialId) ? { ...entry, suspended: false } : entry;
 });
 
-exports.__trackingHelpers = { replaceIngredient, restoreIngredient };
+exports.__trackingHelpers = { materialUsageFilter, replaceIngredient, restoreIngredient };
 
 const updateProductMaterialReferences = async (materialId, action, replacementId = null) => {
   const products = await Product.find(materialUsageFilter(materialId));

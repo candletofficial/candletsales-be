@@ -95,8 +95,15 @@ const prepareProductPayload = async (input, existing = null) => {
     payload.variant_groups = [];
     payload.skus = [];
     payload.formula_components = [];
+    // A custom product is only a costing template. Material tracking events
+    // must not suspend or replace its recipe before it is used in an order.
+    payload.base_ingredients = payload.base_ingredients.map(entry => ({
+      ...entry,
+      suspended: false,
+      replacement_for: null,
+    }));
     payload.resolved_base_ingredients = payload.base_ingredients;
-    return applyMaterialSuspensions(payload);
+    return payload;
   }
 
   payload.batch_yield = 1;
@@ -185,7 +192,7 @@ exports.getProducts = async (req, res, next) => {
       let base_cost = 0;
       if (obj.resolved_base_ingredients?.length || obj.base_ingredients) {
         (obj.resolved_base_ingredients?.length ? obj.resolved_base_ingredients : obj.base_ingredients).forEach(item => {
-          if (!item.suspended && item.ingredient_id && item.ingredient_id.price) {
+          if ((obj.product_type === 'custom' || !item.suspended) && item.ingredient_id && item.ingredient_id.price) {
             base_cost += item.ingredient_id.price * item.quantity;
           }
         });
