@@ -7,13 +7,19 @@ const ingredientCost = (ingredients = []) => ingredients.reduce((sum, row) => (
   row?.suspended === true ? sum : sum + number(row?.ingredient_id?.price) * number(row?.quantity)
 ), 0);
 
+const customItemCost = (items = []) => items.reduce((sum, row) => (
+  sum + number(row?.quantity) * number(row?.unit_cost)
+), 0);
+
 const calculateProductUnitCost = (product, skuId) => {
   if (!product) return null;
   const baseIngredients = product.resolved_base_ingredients?.length
     ? product.resolved_base_ingredients
     : product.base_ingredients || [];
   const sku = (product.skus || []).find(row => String(row.id) === String(skuId || ''));
-  return ingredientCost(baseIngredients) + ingredientCost(sku?.extra_ingredients || []);
+  return ingredientCost(baseIngredients)
+    + ingredientCost(sku?.extra_ingredients || [])
+    + customItemCost(product.custom_cost_items || []);
 };
 
 const createCurrentUnitCostResolver = (products = []) => {

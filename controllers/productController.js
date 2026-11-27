@@ -24,6 +24,16 @@ const mergeIngredients = (entries = []) => {
     .map(([, value]) => value);
 };
 
+const normalizeCustomCostItems = (entries = []) => (Array.isArray(entries) ? entries : [])
+  .map(entry => ({
+    name: String(entry?.name || '').trim(),
+    quantity: Number(entry?.quantity),
+    unit: String(entry?.unit || '').trim(),
+    unit_cost: Number(entry?.unit_cost),
+  }))
+  .filter(entry => entry.name && Number.isFinite(entry.quantity) && entry.quantity > 0
+    && Number.isFinite(entry.unit_cost) && entry.unit_cost >= 0);
+
 const applyMaterialSuspensions = async payload => {
   const groups = [payload.base_ingredients || [], payload.resolved_base_ingredients || []];
   for (const sku of payload.skus || []) groups.push(sku.extra_ingredients || []);
@@ -55,7 +65,9 @@ const prepareProductPayload = async (input, existing = null) => {
 
   payload.product_type = ['sub_formula', 'custom'].includes(payload.product_type) ? payload.product_type : 'sellable';
   payload.base_ingredients = mergeIngredients(payload.base_ingredients);
+  payload.custom_cost_items = normalizeCustomCostItems(payload.custom_cost_items);
   if (payload.product_type === 'sub_formula') {
+    payload.custom_cost_items = [];
     payload.batch_yield = Math.max(1, Math.trunc(Number(payload.batch_yield) || 1));
     payload.base_price = 0;
     payload.original_price = 0;
@@ -84,7 +96,7 @@ const prepareProductPayload = async (input, existing = null) => {
         payload.custom_other_cost = Number(groupSettings.custom_other_cost) || 0;
       }
     }
-    if (!payload.base_ingredients.length) {
+    if (!payload.base_ingredients.length && !payload.custom_cost_items.length) {
       const error = new Error('Sản phẩm custom phải có ít nhất một nguyên vật liệu.');
       error.statusCode = 400;
       throw error;
@@ -109,6 +121,7 @@ const prepareProductPayload = async (input, existing = null) => {
   payload.batch_yield = 1;
   payload.custom_group = '';
   payload.custom_quantity = 1;
+  payload.custom_cost_items = [];
 
   const components = Array.isArray(payload.formula_components) ? payload.formula_components : [];
   const normalizedComponents = [];
@@ -197,6 +210,9 @@ exports.getProducts = async (req, res, next) => {
           }
         });
       }
+      base_cost += (obj.custom_cost_items || []).reduce((sum, item) => (
+        sum + (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0)
+      ), 0);
       obj.base_cost = base_cost;
 
       // Tính cost cho từng SKU

@@ -632,6 +632,9 @@ const fetchDashboardData = async (options = {}) => {
         base_cost += item.ingredient_id.price * item.quantity;
       }
     });
+    base_cost += (obj.custom_cost_items || []).reduce((sum, item) => (
+      sum + (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0)
+    ), 0);
     obj.base_cost = base_cost;
     if (obj.skus) {
       obj.skus = obj.skus.map((sku) => {

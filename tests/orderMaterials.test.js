@@ -8,6 +8,7 @@ const ShippingConfig = require('../models/ShippingConfig');
 const { itemMaterials, materialsRevision, materialDifference, preserveOrderMaterials } = require('../utils/orderItemMaterials');
 const { buildMaterialDeductions, orderRevenueAmount } = require('../controllers/orderController');
 const { getItemMaterials, updateItemMaterials } = require('../controllers/orderMaterialsController');
+const { calculateProductUnitCost } = require('../utils/currentOrderCost');
 
 afterEach(() => mock.restoreAll());
 const ids = { order: '000000000000000000000001', product: '000000000000000000000002', old: '000000000000000000000003', next: '000000000000000000000004', extra: '000000000000000000000005' };
@@ -138,6 +139,7 @@ test('custom order products do not deduct standard packing materials or packing 
     _id: ids.product,
     product_type: 'custom',
     base_ingredients: [{ ingredient_id: ids.old, quantity: 2 }],
+    custom_cost_items: [{ name: 'Tem đặt ngoài', quantity: 1, unit: 'cái', unit_cost: 2500 }],
     skus: [],
   };
   let shippingConfigQueried = false;
@@ -152,6 +154,19 @@ test('custom order products do not deduct standard packing materials or packing 
   assert.deepEqual([...result.deductions], [[ids.old, 6]]);
   assert.equal(result.packagingCost, 0);
   assert.equal(shippingConfigQueried, false);
+});
+
+test('non-inventory custom items affect unit cost without becoming stock deductions', () => {
+  const product = {
+    base_ingredients: [{ ingredient_id: { price: 100 }, quantity: 2 }],
+    custom_cost_items: [
+      { name: 'Tem đặt ngoài', quantity: 2, unit: 'cái', unit_cost: 2500 },
+      { name: 'Phí gia công', quantity: 1, unit: 'lần', unit_cost: 3000 },
+    ],
+    skus: [],
+  };
+
+  assert.equal(calculateProductUnitCost(product), 8200);
 });
 
 test('custom order other cost is deducted from the revenue credited to assets', () => {

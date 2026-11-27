@@ -54,6 +54,16 @@ const productSchema = new mongoose.Schema({
     replacement_for: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', default: null }
   }],
 
+  // Cost-only items used by custom products. They are intentionally not linked
+  // to Material, so they never participate in stock checks or deductions.
+  custom_cost_items: [{
+    name: { type: String, required: true, trim: true },
+    quantity: { type: Number, required: true, min: 0.0001 },
+    unit: { type: String, trim: true, default: '' },
+    unit_cost: { type: Number, required: true, min: 0 },
+    _id: false,
+  }],
+
   // Công thức phụ được gắn theo số mẻ. Mỗi mẻ sẽ được bung thành nguyên liệu
   // thực tế trong resolved_base_ingredients để tính giá vốn và trừ kho.
   formula_components: [{
