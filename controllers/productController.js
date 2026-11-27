@@ -1,11 +1,24 @@
 const Product = require('../models/Product');
 const Material = require('../models/Material');
+const Order = require('../models/Order');
 const { removeFileIfLocal } = require('./uploadController');
 const { enrichProductAvailability } = require('../utils/productAvailability');
 
 const materialId = value => String(value?._id || value || '');
 const formulaId = value => String(value?.formula_id?._id || value?.formula_id || '');
 const replacementForId = value => String(value?.replacement_for?._id || value?.replacement_for || '');
+
+const isCustomGroupLocked = async group => {
+  const name = String(group || '').trim();
+  if (!name) return false;
+  return Boolean(await Product.exists({ product_type: 'custom', custom_group: name, custom_locked_at: { $ne: null } })
+    || await Order.exists({ custom_group: name }));
+};
+
+const customLockResponse = res => res.status(409).json({
+  success: false,
+  message: 'Đơn custom đã được thêm vào đơn hàng nên đã khóa và không thể chỉnh sửa hoặc sử dụng lại.',
+});
 
 const mergeIngredients = (entries = []) => {
   const totals = new Map();
@@ -198,8 +211,21 @@ exports.getProducts = async (req, res, next) => {
       .populate('skus.extra_ingredients.ingredient_id')
       .sort({ createdAt: -1 });
 
+    const customOrders = await Order.find({ custom_group: { $nin: ['', null] } })
+      .select('custom_group items').lean();
+    const usedCustomGroups = new Set(customOrders.map(order => order.custom_group));
+    const customSnapshots = new Map(customOrders.flatMap(order => (order.items || []).map(item => [
+      materialId(item.product_id),
+      { unit_cost: Number(item.unit_cost) || 0, material_overrides: item.material_overrides || [] },
+    ])));
+
     const result = products.map((p) => {
       const obj = p.toObject();
+      obj.custom_group_locked = obj.product_type === 'custom'
+        && (Boolean(obj.custom_locked_at) || usedCustomGroups.has(obj.custom_group));
+      if (obj.product_type === 'custom' && customSnapshots.has(String(obj._id))) {
+        obj.custom_snapshot = customSnapshots.get(String(obj._id));
+      }
 
       // Tính base_cost
       let base_cost = 0;
@@ -213,6 +239,7 @@ exports.getProducts = async (req, res, next) => {
       base_cost += (obj.custom_cost_items || []).reduce((sum, item) => (
         sum + (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0)
       ), 0);
+      if (obj.custom_snapshot) base_cost = obj.custom_snapshot.unit_cost;
       obj.base_cost = base_cost;
 
       // Tính cost cho từng SKU
@@ -242,6 +269,9 @@ exports.getProducts = async (req, res, next) => {
 exports.createProduct = async (req, res, next) => {
   try {
     const payload = await prepareProductPayload(req.body);
+    if (payload.product_type === 'custom' && await isCustomGroupLocked(payload.custom_group)) {
+      return customLockResponse(res);
+    }
     const product = await Product.create(payload);
     res.status(201).json({ success: true, data: product });
   } catch (error) {
@@ -282,6 +312,7 @@ exports.updateCustomGroupSettings = async (req, res, next) => {
   try {
     const group = String(req.body.group || '').trim();
     if (!group) return res.status(400).json({ success: false, message: 'Tên đơn custom không hợp lệ.' });
+    if (await isCustomGroupLocked(group)) return customLockResponse(res);
 
     const discountType = ['none', 'percent', 'fixed'].includes(req.body.discount_type) ? req.body.discount_type : 'none';
     const discountValue = discountType === 'none' ? 0 : Math.max(0, Number(req.body.discount_value) || 0);
@@ -301,6 +332,14 @@ exports.updateProduct = async (req, res, next) => {
   try {
     const existing = await Product.findById(req.params.id);
     if (!existing) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
+    if (existing.product_type === 'custom' && await isCustomGroupLocked(existing.custom_group)) {
+      return customLockResponse(res);
+    }
+    const requestedCustomGroup = req.body.product_type === 'custom' ? String(req.body.custom_group || '').trim() : '';
+    if (requestedCustomGroup && requestedCustomGroup !== existing.custom_group
+      && await isCustomGroupLocked(requestedCustomGroup)) {
+      return customLockResponse(res);
+    }
 
     // Thu thập danh sách ảnh cũ trong database
     const oldImages = [existing.image, ...(existing.images || [])].filter(Boolean);
@@ -332,6 +371,9 @@ exports.deleteProduct = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Công thức phụ đang được sản phẩm khác sử dụng nên chưa thể xoá.' });
     }
     if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
+    if (product.product_type === 'custom' && await isCustomGroupLocked(product.custom_group)) {
+      return customLockResponse(res);
+    }
 
     // Xóa toàn bộ file ảnh vật lý của sản phẩm trên ổ cứng máy chủ
     const allImages = [product.image, ...(product.images || [])].filter(Boolean);

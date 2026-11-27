@@ -6,7 +6,7 @@ const Product = require('../models/Product');
 const Material = require('../models/Material');
 const ShippingConfig = require('../models/ShippingConfig');
 const { itemMaterials, materialsRevision, materialDifference, preserveOrderMaterials } = require('../utils/orderItemMaterials');
-const { buildMaterialDeductions, orderRevenueAmount } = require('../controllers/orderController');
+const { buildMaterialDeductions, orderRevenueAmount, prepareCustomOrderSnapshot } = require('../controllers/orderController');
 const { getItemMaterials, updateItemMaterials } = require('../controllers/orderMaterialsController');
 const { calculateProductUnitCost } = require('../utils/currentOrderCost');
 
@@ -156,6 +156,17 @@ test('custom order products do not deduct standard packing materials or packing 
   assert.equal(shippingConfigQueried, false);
 });
 
+test('custom order material snapshots cannot be edited', async () => {
+  const { req, order, state } = setup();
+  order.custom_group = 'CT đã chốt';
+
+  const { error } = await update(req);
+
+  assert.equal(error.statusCode, 409);
+  assert.match(error.message, /custom.*chốt/i);
+  assert.equal(state().writes, 0);
+});
+
 test('non-inventory custom items affect unit cost without becoming stock deductions', () => {
   const product = {
     base_ingredients: [{ ingredient_id: { price: 100 }, quantity: 2 }],
@@ -167,6 +178,31 @@ test('non-inventory custom items affect unit cost without becoming stock deducti
   };
 
   assert.equal(calculateProductUnitCost(product), 8200);
+});
+
+test('custom order creation snapshots recipe, selling price and cost and rejects reuse', async () => {
+  const product = {
+    _id: ids.product, product_type: 'custom', productId: 'CUS-1', name: 'Nến custom',
+    base_price: 50000, custom_quantity: 2, custom_locked_at: null, skus: [],
+    base_ingredients: [{ ingredient_id: { _id: ids.old, name: 'Sáp', unit: 'kg', price: 70000 }, quantity: 0.1 }],
+    custom_cost_items: [{ name: 'Tem ngoài kho', unit: 'cái', quantity: 1, unit_cost: 2500 }],
+  };
+  mock.method(Order, 'exists', async () => false);
+  mock.method(Product, 'find', () => ({
+    populate() { return this; },
+    then(resolve) { return Promise.resolve(resolve([product])); },
+  }));
+
+  const [snapshot] = await prepareCustomOrderSnapshot([{ product_id: ids.product, unit_price: 1, unit_cost: 1, quantity: 1 }], 'CT mới');
+  assert.equal(snapshot.unit_price, 50000);
+  assert.equal(snapshot.unit_cost, 9500);
+  assert.equal(snapshot.quantity, 2);
+  assert.equal(snapshot.material_overrides[0].unit_cost, 70000);
+  assert.ok(snapshot.materials_key);
+
+  mock.restoreAll();
+  mock.method(Order, 'exists', async () => true);
+  await assert.rejects(() => prepareCustomOrderSnapshot([{ product_id: ids.product }], 'CT đã dùng'), /không thể sử dụng lại/i);
 });
 
 test('custom order other cost is deducted from the revenue credited to assets', () => {

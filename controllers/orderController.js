@@ -5,6 +5,7 @@ const ShippingConfig = require('../models/ShippingConfig');
 const SystemConfig = require('../models/SystemConfig');
 const FundTransaction = require('../models/FundTransaction');
 const PaymentSession = require('../models/PaymentSession');
+const { randomUUID } = require('crypto');
 const { triggerAutoConfirmImports } = require('../utils/inventoryHelpers');
 const { notifyNewWebsiteOrder } = require('../utils/orderEmailNotifier');
 const { freeshipDiscount } = require('../utils/freeshipDiscount');
@@ -48,6 +49,97 @@ const resolveCustomOtherCost = async (customGroup, items = []) => {
     custom_group: group,
   }).select('custom_other_cost').lean();
   return Math.max(0, Number(template?.custom_other_cost) || 0);
+};
+
+const customItemUnitCost = product => {
+  const tracked = itemMaterials({}, product).reduce((sum, entry) => (
+    sum + (Number(entry?.ingredient_id?.price) || 0) * (Number(entry?.quantity) || 0)
+  ), 0);
+  const outsideStock = (product?.custom_cost_items || []).reduce((sum, entry) => (
+    sum + (Number(entry?.unit_cost) || 0) * (Number(entry?.quantity) || 0)
+  ), 0);
+  return tracked + outsideStock;
+};
+
+const materialSnapshot = product => itemMaterials({}, product).map(entry => ({
+  ingredient_id: entry.ingredient_id?._id || entry.ingredient_id,
+  quantity: Number(entry.quantity) || 0,
+  name: entry.ingredient_id?.name || '',
+  unit: entry.ingredient_id?.unit || '',
+  unit_cost: Number(entry.ingredient_id?.price) || 0,
+}));
+
+const prepareCustomOrderSnapshot = async (items = [], customGroup = '') => {
+  const group = String(customGroup || '').trim();
+  if (!group) return items;
+  if (await Order.exists({ custom_group: group })) {
+    const error = new Error('Đơn custom này đã được thêm vào một đơn hàng và không thể sử dụng lại.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const products = await Product.find({ product_type: 'custom', custom_group: group })
+    .populate('base_ingredients.ingredient_id')
+    .populate('resolved_base_ingredients.ingredient_id');
+  if (!products.length || products.some(product => product.custom_locked_at)) {
+    const error = new Error('Đơn custom không tồn tại hoặc đã bị khóa.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const byId = new Map(products.map(product => [String(product._id), product]));
+  const customLines = items.filter(item => byId.has(String(item.product_id)));
+  const incomingIds = new Set(customLines.map(item => String(item.product_id)));
+  if (incomingIds.size !== products.length || customLines.length !== products.length) {
+    const error = new Error('Đơn hàng phải chứa đầy đủ mỗi sản phẩm của đơn custom đúng một lần.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return items.map(item => {
+    const product = byId.get(String(item.product_id));
+    if (!product) return item;
+    return {
+      ...item,
+      productId: product.productId,
+      product_name: product.name,
+      product_image: product.image || null,
+      sku_id: null,
+      sku_label: '',
+      unit_price: Number(product.base_price) || 0,
+      unit_cost: customItemUnitCost(product),
+      quantity: Math.max(1, Number(product.custom_quantity) || 1),
+      material_overrides: materialSnapshot(product),
+      materials_key: randomUUID(),
+    };
+  });
+};
+
+const backfillLegacyCustomSnapshots = async (orders = []) => {
+  const customOrders = orders.filter(order => String(order?.custom_group || '').trim());
+  if (!customOrders.length) return;
+  const groups = [...new Set(customOrders.map(order => String(order.custom_group).trim()))];
+  const productIds = [...new Set(customOrders.flatMap(order => (order.items || [])
+    .filter(item => !Array.isArray(item.material_overrides))
+    .map(item => item.product_id).filter(Boolean).map(String)))];
+  const products = productIds.length ? await Product.find({ _id: { $in: productIds }, product_type: 'custom' })
+    .populate('base_ingredients.ingredient_id')
+    .populate('resolved_base_ingredients.ingredient_id') : [];
+  const byId = new Map(products.map(product => [String(product._id), product]));
+  for (const order of customOrders) {
+    let changed = false;
+    const items = (order.items || []).map(rawItem => {
+      const item = typeof rawItem?.toObject === 'function' ? rawItem.toObject() : { ...rawItem };
+      const product = byId.get(String(item.product_id));
+      if (!product || Array.isArray(item.material_overrides)) return item;
+      changed = true;
+      return { ...item, material_overrides: materialSnapshot(product), materials_key: item.materials_key || randomUUID() };
+    });
+    if (changed) {
+      await Order.updateOne({ _id: order._id }, { $set: { items } });
+      order.items = items;
+    }
+  }
+  await Product.updateMany({ product_type: 'custom', custom_group: { $in: groups }, custom_locked_at: null }, {
+    $set: { custom_locked_at: new Date() },
+  });
 };
 
 // Orders created before custom_other_cost existed need a one-time snapshot
@@ -281,6 +373,7 @@ exports.getOrders = async (req, res, next) => {
   try {
     const orders = await Order.find().select('+tracking_token').sort({ ordered_at: -1 });
     await backfillLegacyCustomOtherCosts(orders);
+    await backfillLegacyCustomSnapshots(orders);
     res.status(200).json({ success: true, data: orders });
   } catch (error) {
     next(error);
@@ -295,6 +388,7 @@ exports.getOrder = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
     await backfillLegacyCustomOtherCosts([order]);
+    await backfillLegacyCustomSnapshots([order]);
     res.status(200).json({ success: true, data: order });
   } catch (error) {
     next(error);
@@ -315,6 +409,9 @@ exports.createOrder = async (req, res, next) => {
     if (!is_seeding && (!items || items.length === 0)) {
       return res.status(400).json({ success: false, message: 'Đơn hàng phải có ít nhất 1 sản phẩm' });
     }
+    const normalizedCustomGroup = typeof custom_group === 'string' ? custom_group.trim() : '';
+    items = await prepareCustomOrderSnapshot(items, normalizedCustomGroup);
+    req.body.items = items;
 
     // Xác định orderId: dùng từ client (nhập tay) hoặc tự sinh nếu không có
     let orderId;
@@ -460,7 +557,6 @@ exports.createOrder = async (req, res, next) => {
       ? orderId.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
       : undefined;
 
-    const normalizedCustomGroup = typeof custom_group === 'string' ? custom_group.trim() : '';
     const customOtherCost = await resolveCustomOtherCost(normalizedCustomGroup, items);
 
     // 2. Tạo đơn hàng
@@ -501,6 +597,11 @@ exports.createOrder = async (req, res, next) => {
       seeding_cost: seeding_cost || 0,
       ordered_at: ordered_at || new Date(),
     });
+    if (normalizedCustomGroup) {
+      await Product.updateMany({ product_type: 'custom', custom_group: normalizedCustomGroup }, {
+        $set: { custom_locked_at: new Date(), custom_order_id: order._id },
+      });
+    }
 
     // Tạo giao dịch trả phí seeding
     if (order.is_seeding && order.seeding_cost > 0) {
@@ -623,6 +724,9 @@ exports.updateOrder = async (req, res, next) => {
     const oldOrder = await Order.findById(req.params.id);
     if (!oldOrder) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+    }
+    if (oldOrder.custom_group) {
+      return res.status(409).json({ success: false, message: 'Đơn hàng custom đã được chốt và không thể chỉnh sửa.' });
     }
     if (Array.isArray(items)) items = preserveOrderMaterials(items, oldOrder.items);
     const transitionError = trackingTransitionError(oldOrder, delivery_status);
@@ -1082,6 +1186,11 @@ exports.deleteOrder = async (req, res, next) => {
     await session.withTransaction(async () => {
       order = await Order.findById(req.params.id).session(session);
       if (!order) return;
+      if (order.custom_group) {
+        const error = new Error('Đơn hàng custom đã được chốt và không thể xóa.');
+        error.statusCode = 409;
+        throw error;
+      }
       alreadyRefunded = ['returned', 'cancelled'].includes(order.status)
         || ['failed', 'cancelled'].includes(order.delivery_status);
 
@@ -1278,6 +1387,7 @@ exports.markAsReturned = async (req, res, next) => {
 
 exports.buildMaterialDeductions = buildMaterialDeductions;
 exports.orderRevenueAmount = orderRevenueAmount;
+exports.prepareCustomOrderSnapshot = prepareCustomOrderSnapshot;
 
 // PATCH /api/orders/:id/delivery-status
 exports.updateDeliveryStatus = async (req, res, next) => {

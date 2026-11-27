@@ -25,6 +25,8 @@ const productSchema = new mongoose.Schema({
   custom_discount_type: { type: String, enum: ['none', 'percent', 'fixed'], default: 'none' },
   custom_discount_value: { type: Number, min: 0, default: 0 },
   custom_other_cost: { type: Number, min: 0, default: 0 },
+  custom_locked_at: { type: Date, default: null },
+  custom_order_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
   batch_yield: {
     type: Number,
     default: 1,

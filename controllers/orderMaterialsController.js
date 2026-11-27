@@ -68,6 +68,9 @@ exports.updateItemMaterials = async (req, res, next) => {
     let result;
     await session.withTransaction(async () => {
       const { order, item, entries, index } = await loadItem(req, session);
+      if (order.custom_group) {
+        fail('Đơn hàng custom đã được chốt nên không thể đổi nguyên liệu.', 409);
+      }
       if (['returned', 'cancelled'].includes(order.status) || ['returning', 'returned', 'failed', 'cancelled'].includes(order.delivery_status)) {
         fail('Không thể đổi nguyên liệu của đơn đã hoàn hoặc huỷ.');
       }
