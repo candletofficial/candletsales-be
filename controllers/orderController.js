@@ -12,6 +12,7 @@ const { freeshipDiscount } = require('../utils/freeshipDiscount');
 const { itemMaterials, materialId, preserveOrderMaterials } = require('../utils/orderItemMaterials');
 const { newTrackingToken, trackingPath, trackingTransitionError } = require('../utils/orderTracking');
 const { BASE_FUND_ACCOUNTS, getEnabledCarrierIds, resolveOrderRevenueAccount } = require('../utils/carrierCodAccounts');
+const { returnedPaymentStatus, canRecordRefund } = require('../utils/orderPaymentStatus');
 
 const revenueAccountForOrder = async order => {
   const snapshot = typeof order?.toObject === 'function' ? order.toObject() : { ...order };
@@ -1327,6 +1328,9 @@ exports.processReturnOrder = async (orderId, explicitReturnCost = null) => {
 
       order.status = 'returned';
       order.delivery_status = 'returned';
+      // Paid returns still require a real transfer back to the customer.
+      // Unpaid/COD returns must no longer appear as awaiting payment.
+      order.payment_status = returnedPaymentStatus(order.payment_status);
       order.return_cost = returnCost;
       order.returned_at = new Date();
       await order.save({ session });
@@ -1709,7 +1713,7 @@ exports.markAsRefunded = async (req, res, next) => {
     }
 
     const isPaidTransfer = order.payment_method === 'transfer'
-      && (order.payment_status === 'paid' || order.source !== 'website');
+      && ['paid', 'refund_pending'].includes(order.payment_status);
     if (!isPaidTransfer) {
       return res.status(400).json({
         success: false,
@@ -1717,10 +1721,10 @@ exports.markAsRefunded = async (req, res, next) => {
       });
     }
 
-    if (order.status !== 'cancelled' && order.delivery_status !== 'cancelled') {
+    if (!canRecordRefund(order)) {
       return res.status(400).json({
         success: false,
-        message: 'Hãy huỷ đơn trước khi xác nhận đã hoàn tiền.'
+        message: 'Hãy huỷ hoặc hoàn đơn trước khi xác nhận đã hoàn tiền.'
       });
     }
 

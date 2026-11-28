@@ -83,7 +83,7 @@ const orderSchema = new mongoose.Schema({
   // được đánh dấu paid sau khi webhook SePay đã xác thực giao dịch thật.
   payment_status: {
     type: String,
-    enum: ['pending', 'paid', 'failed', 'refunded'],
+    enum: ['pending', 'paid', 'failed', 'refund_pending', 'refunded'],
     default: 'pending'
   },
   payment_code: { type: String, unique: true, sparse: true },
