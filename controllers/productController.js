@@ -85,6 +85,7 @@ const prepareProductPayload = async (input, existing = null) => {
     payload.base_price = 0;
     payload.original_price = 0;
     payload.shop_order = null;
+    payload.is_visible_in_shop = false;
     payload.variant_groups = [];
     payload.skus = [];
     payload.formula_components = [];
@@ -116,6 +117,7 @@ const prepareProductPayload = async (input, existing = null) => {
     }
     payload.batch_yield = 1;
     payload.shop_order = null;
+    payload.is_visible_in_shop = false;
     payload.category = 'Sản phẩm custom';
     payload.variant_groups = [];
     payload.skus = [];
@@ -132,6 +134,7 @@ const prepareProductPayload = async (input, existing = null) => {
   }
 
   payload.batch_yield = 1;
+  payload.is_visible_in_shop = payload.is_visible_in_shop !== false;
   payload.custom_group = '';
   payload.custom_quantity = 1;
   payload.custom_cost_items = [];
@@ -303,6 +306,25 @@ exports.updateShopOrder = async (req, res, next) => {
     })));
 
     res.status(200).json({ success: true, message: 'Đã cập nhật thứ tự sản phẩm' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateShopVisibility = async (req, res, next) => {
+  try {
+    if (typeof req.body.is_visible_in_shop !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'Trạng thái hiển thị không hợp lệ' });
+    }
+
+    const product = await Product.findOneAndUpdate(
+      { _id: req.params.id, product_type: { $nin: ['sub_formula', 'custom'] } },
+      { $set: { is_visible_in_shop: req.body.is_visible_in_shop } },
+      { new: true, runValidators: true },
+    );
+    if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm đăng bán' });
+
+    res.status(200).json({ success: true, data: product });
   } catch (error) {
     next(error);
   }

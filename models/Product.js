@@ -41,6 +41,7 @@ const productSchema = new mongoose.Schema({
   tag: { type: String, default: '' },
   tag_color: { type: String, default: '' },
   shop_order: { type: Number, default: null, min: 1 },
+  is_visible_in_shop: { type: Boolean, default: true, index: true },
   
   // Filtering fields
   scent_group: { type: String, default: null },

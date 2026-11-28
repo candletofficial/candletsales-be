@@ -10,6 +10,7 @@ router.get('/', productController.getProducts);
 router.post('/', productController.createProduct);
 router.put('/shop-order', productController.updateShopOrder);
 router.put('/custom-group-settings', productController.updateCustomGroupSettings);
+router.patch('/:id/shop-visibility', productController.updateShopVisibility);
 router.put('/:id', productController.updateProduct);
 router.delete('/:id', productController.deleteProduct);
 

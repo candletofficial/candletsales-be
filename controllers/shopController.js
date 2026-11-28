@@ -6,7 +6,10 @@ const { enrichProductAvailability } = require('../utils/productAvailability');
 // Lấy danh sách sản phẩm hiển thị trên trang chủ cửa hàng
 exports.getShopProducts = async (req, res, next) => {
   try {
-    const products = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } })
+    const products = await Product.find({
+      product_type: { $nin: ['sub_formula', 'custom'] },
+      is_visible_in_shop: { $ne: false },
+    })
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id')
@@ -60,7 +63,11 @@ exports.getShopProducts = async (req, res, next) => {
 // Lấy chi tiết sản phẩm
 exports.getShopProductById = async (req, res, next) => {
   try {
-    const product = await Product.findOne({ _id: req.params.id, product_type: { $nin: ['sub_formula', 'custom'] } })
+    const product = await Product.findOne({
+      _id: req.params.id,
+      product_type: { $nin: ['sub_formula', 'custom'] },
+      is_visible_in_shop: { $ne: false },
+    })
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id');
