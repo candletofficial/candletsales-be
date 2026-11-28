@@ -1712,6 +1712,13 @@ exports.markAsRefunded = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
     }
 
+    if (['shopee', 'tiktok'].includes(order.source)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Đơn sàn được hoàn tiền và đối soát trực tiếp trên sàn, không ghi nhận hoàn tiền thủ công tại đây.'
+      });
+    }
+
     const isPaidTransfer = order.payment_method === 'transfer'
       && ['paid', 'refund_pending'].includes(order.payment_status);
     if (!isPaidTransfer) {

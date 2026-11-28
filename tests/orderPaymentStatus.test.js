@@ -14,5 +14,6 @@ test('refund confirmation is allowed for paid cancelled or returned transfers on
   assert.equal(canRecordRefund({ payment_method: 'transfer', payment_status: 'paid', delivery_status: 'cancelled' }), true);
   assert.equal(canRecordRefund({ payment_method: 'transfer', payment_status: 'failed', status: 'returned' }), false);
   assert.equal(canRecordRefund({ payment_method: 'cash', payment_status: 'paid', status: 'returned' }), false);
+  assert.equal(canRecordRefund({ source: 'shopee', payment_method: 'transfer', payment_status: 'paid', status: 'returned' }), false);
   assert.equal(canRecordRefund({ payment_method: 'transfer', payment_status: 'paid', status: 'completed' }), false);
 });
