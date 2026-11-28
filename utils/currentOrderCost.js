@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Product = require('../models/Product');
+const { productBaseIngredients, skuIngredients } = require('./productIngredients');
 
 const number = value => Number(value) || 0;
 
@@ -13,12 +14,9 @@ const customItemCost = (items = []) => items.reduce((sum, row) => (
 
 const calculateProductUnitCost = (product, skuId) => {
   if (!product) return null;
-  const baseIngredients = product.resolved_base_ingredients?.length
-    ? product.resolved_base_ingredients
-    : product.base_ingredients || [];
   const sku = (product.skus || []).find(row => String(row.id) === String(skuId || ''));
-  return ingredientCost(baseIngredients)
-    + ingredientCost(sku?.extra_ingredients || [])
+  return ingredientCost(productBaseIngredients(product, sku))
+    + ingredientCost(skuIngredients(sku))
     + customItemCost(product.custom_cost_items || []);
 };
 
@@ -59,6 +57,7 @@ const buildCurrentUnitCostResolver = async (orders = []) => {
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id')
+      .populate('skus.resolved_extra_ingredients.ingredient_id')
       .lean()
     : [];
 

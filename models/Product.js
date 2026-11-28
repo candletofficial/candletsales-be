@@ -93,8 +93,19 @@ const productSchema = new mongoose.Schema({
     id: { type: String, required: true }, // e.g. "SP-1054537"
     price: { type: Number, default: 0 }, // Selling price for this specific SKU
     image: { type: String, default: '' }, // Optional image linked to this variant
+    use_base_formula: { type: Boolean, default: true },
     combination: [{ type: String }], // Array of option ids, e.g. ["g1-RBY", "g2-LRG"]
     extra_ingredients: [{
+      ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },
+      quantity: { type: Number, required: true, min: 0 },
+      suspended: { type: Boolean, default: false },
+      replacement_for: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', default: null }
+    }],
+    formula_components: [{
+      formula_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+      quantity: { type: Number, required: true, min: 0.0001, default: 1 }
+    }],
+    resolved_extra_ingredients: [{
       ingredient_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },
       quantity: { type: Number, required: true, min: 0 },
       suspended: { type: Boolean, default: false },

@@ -1,4 +1,5 @@
 const materialId = (value) => String(value?._id || value || '');
+const { productBaseIngredients, skuIngredients } = require('./productIngredients');
 
 const materialStock = (material) => {
   if (!material || typeof material !== 'object') return 0;
@@ -28,14 +29,12 @@ const recipeCapacity = (entries = []) => {
 
 const enrichProductAvailability = (product) => {
   const value = product?.toObject ? product.toObject() : { ...product };
-  const base = value.resolved_base_ingredients?.length
-    ? value.resolved_base_ingredients : value.base_ingredients || [];
   value.skus = (value.skus || []).map((sku) => ({
     ...sku,
-    stock: recipeCapacity([...base, ...(sku.extra_ingredients || [])]),
+    stock: recipeCapacity([...productBaseIngredients(value, sku), ...skuIngredients(sku)]),
   }));
   const skuStocks = value.skus.map((sku) => sku.stock).filter((stock) => Number.isFinite(stock));
-  value.stock = skuStocks.length ? Math.max(...skuStocks) : recipeCapacity(base);
+  value.stock = skuStocks.length ? Math.max(...skuStocks) : recipeCapacity(productBaseIngredients(value));
   return value;
 };
 

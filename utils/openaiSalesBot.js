@@ -3,6 +3,7 @@ const MessengerBotKnowledge = require('../models/MessengerBotKnowledge');
 const MessengerProductProfile = require('../models/MessengerProductProfile');
 const MessengerBotMedia = require('../models/MessengerBotMedia');
 const { enrichProductAvailability } = require('./productAvailability');
+const { skuIngredients } = require('./productIngredients');
 
 const OUTPUT_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -107,11 +108,15 @@ const selectRelevantProducts = (products, profiles, incomingText, conversation) 
 
 const productCatalog = async (incomingText, conversation) => {
   const [products, profiles] = await Promise.all([
-    Product.find().select('productId name image description base_price category scent_group volume variant_groups skus base_ingredients')
-      .populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id').limit(60).lean(),
+    Product.find().select('productId name image description base_price category scent_group volume variant_groups skus base_ingredients resolved_base_ingredients')
+      .populate('base_ingredients.ingredient_id').populate('resolved_base_ingredients.ingredient_id')
+      .populate('skus.extra_ingredients.ingredient_id').populate('skus.resolved_extra_ingredients.ingredient_id').limit(60).lean(),
     MessengerProductProfile.find().lean(),
   ]);
-  const productsWithStock = products.map(enrichProductAvailability);
+  const productsWithStock = products.map(product => {
+    product.skus = (product.skus || []).map(sku => ({ ...sku, extra_ingredients: skuIngredients(sku) }));
+    return enrichProductAvailability(product);
+  });
   return selectRelevantProducts(productsWithStock, profiles, incomingText, conversation).map(({ product, profile }) => ({
     _id: String(product._id), productId: product.productId, name: product.name,
     image: product.image, description: String(product.description || '').slice(0, 500), base_price: product.base_price, stock: product.stock,

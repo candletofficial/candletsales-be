@@ -1,13 +1,15 @@
 const crypto = require('crypto');
+const { productBaseIngredients, skuIngredients } = require('./productIngredients');
 
 const materialId = value => String(value?._id || value || '');
 const roundQuantity = value => Number(value.toFixed(4));
 
 function itemMaterials(item, product) {
   if (Array.isArray(item.material_overrides)) return item.material_overrides;
+  const sku = product?.skus?.find(row => row.id === item.sku_id);
   return [
-    ...(product?.resolved_base_ingredients?.length ? product.resolved_base_ingredients : product?.base_ingredients || []),
-    ...(product?.skus?.find(sku => sku.id === item.sku_id)?.extra_ingredients || []),
+    ...productBaseIngredients(product, sku),
+    ...skuIngredients(sku),
   ].filter(entry => entry?.suspended !== true);
 }
 

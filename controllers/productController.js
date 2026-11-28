@@ -3,6 +3,7 @@ const Material = require('../models/Material');
 const Order = require('../models/Order');
 const { removeFileIfLocal } = require('./uploadController');
 const { enrichProductAvailability } = require('../utils/productAvailability');
+const { skuUsesBaseFormula } = require('../utils/productIngredients');
 
 const materialId = value => String(value?._id || value || '');
 const formulaId = value => String(value?.formula_id?._id || value?.formula_id || '');
@@ -49,7 +50,7 @@ const normalizeCustomCostItems = (entries = []) => (Array.isArray(entries) ? ent
 
 const applyMaterialSuspensions = async payload => {
   const groups = [payload.base_ingredients || [], payload.resolved_base_ingredients || []];
-  for (const sku of payload.skus || []) groups.push(sku.extra_ingredients || []);
+  for (const sku of payload.skus || []) groups.push(sku.extra_ingredients || [], sku.resolved_extra_ingredients || []);
   const ids = [...new Set(groups.flat().map(entry => materialId(entry?.ingredient_id)).filter(Boolean))];
   if (!ids.length) return payload;
   const paused = await Material.find({
@@ -64,7 +65,11 @@ const applyMaterialSuspensions = async payload => {
   }));
   payload.base_ingredients = tag(payload.base_ingredients);
   payload.resolved_base_ingredients = tag(payload.resolved_base_ingredients);
-  payload.skus = (payload.skus || []).map(sku => ({ ...sku, extra_ingredients: tag(sku.extra_ingredients) }));
+  payload.skus = (payload.skus || []).map(sku => ({
+    ...sku,
+    extra_ingredients: tag(sku.extra_ingredients),
+    resolved_extra_ingredients: tag(sku.resolved_extra_ingredients),
+  }));
   return payload;
 };
 
@@ -75,6 +80,11 @@ const prepareProductPayload = async (input, existing = null) => {
   delete payload.createdAt;
   delete payload.updatedAt;
   delete payload.resolved_base_ingredients;
+  payload.skus = (payload.skus || []).map(sku => {
+    const clean = { ...sku };
+    delete clean.resolved_extra_ingredients;
+    return clean;
+  });
 
   payload.product_type = ['sub_formula', 'custom'].includes(payload.product_type) ? payload.product_type : 'sellable';
   payload.base_ingredients = mergeIngredients(payload.base_ingredients);
@@ -190,14 +200,76 @@ const prepareProductPayload = async (input, existing = null) => {
   }
   payload.formula_components = normalizedComponents;
   payload.resolved_base_ingredients = mergeIngredients(expanded);
+
+  const skuFormulaIds = [...new Set((payload.skus || []).flatMap(sku => (
+    (sku.formula_components || []).map(component => formulaId(component)).filter(Boolean)
+  )))];
+  const skuFormulas = skuFormulaIds.length
+    ? await Product.find({ _id: { $in: skuFormulaIds }, product_type: 'sub_formula' }).lean()
+    : [];
+  if (skuFormulas.length !== skuFormulaIds.length) {
+    const error = new Error('Có công thức phụ trong phân loại không tồn tại hoặc không đúng loại.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const skuFormulaMap = new Map(skuFormulas.map(formula => [String(formula._id), formula]));
+  payload.skus = (payload.skus || []).map(sku => {
+    const skuComponents = [];
+    const skuSeen = new Set();
+    for (const component of Array.isArray(sku.formula_components) ? sku.formula_components : []) {
+      const id = formulaId(component);
+      const quantity = Number(component?.quantity);
+      if (!id || skuSeen.has(id) || (existing && id === String(existing._id))) {
+        const error = new Error(`Phân loại ${sku.id || ''} có công thức phụ không hợp lệ hoặc bị chọn trùng.`);
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        const error = new Error(`Số phần công thức phụ của phân loại ${sku.id || ''} phải lớn hơn 0.`);
+        error.statusCode = 400;
+        throw error;
+      }
+      skuSeen.add(id);
+      skuComponents.push({ formula_id: id, quantity: Number(quantity.toFixed(4)) });
+    }
+
+    const skuExpanded = [...(sku.extra_ingredients || [])];
+    for (const component of skuComponents) {
+      const formula = skuFormulaMap.get(component.formula_id);
+      const ingredients = formula.resolved_base_ingredients?.length
+        ? formula.resolved_base_ingredients : formula.base_ingredients || [];
+      const batchYield = Math.max(1, Number(formula.batch_yield) || 1);
+      for (const ingredient of ingredients) {
+        skuExpanded.push({
+          ingredient_id: ingredient.ingredient_id,
+          quantity: (Number(ingredient.quantity) * component.quantity) / batchYield,
+          suspended: ingredient.suspended === true,
+          replacement_for: ingredient.replacement_for || null,
+        });
+      }
+    }
+    return {
+      ...sku,
+      formula_components: skuComponents,
+      resolved_extra_ingredients: mergeIngredients(skuExpanded),
+    };
+  });
   return applyMaterialSuspensions(payload);
 };
 
 const refreshDependentProducts = async formulaIdValue => {
-  const dependents = await Product.find({ product_type: 'sellable', 'formula_components.formula_id': formulaIdValue });
+  const dependents = await Product.find({
+    product_type: 'sellable',
+    $or: [
+      { 'formula_components.formula_id': formulaIdValue },
+      { 'skus.formula_components.formula_id': formulaIdValue },
+    ],
+  });
   for (const product of dependents) {
     const payload = await prepareProductPayload(product.toObject(), product);
-    await Product.updateOne({ _id: product._id }, { $set: { resolved_base_ingredients: payload.resolved_base_ingredients } });
+    await Product.updateOne({ _id: product._id }, {
+      $set: { resolved_base_ingredients: payload.resolved_base_ingredients, skus: payload.skus },
+    });
   }
 };
 
@@ -212,6 +284,8 @@ exports.getProducts = async (req, res, next) => {
       .populate('resolved_base_ingredients.ingredient_id')
       .populate({ path: 'formula_components.formula_id', select: 'productId name product_type batch_yield base_ingredients resolved_base_ingredients' })
       .populate('skus.extra_ingredients.ingredient_id')
+      .populate({ path: 'skus.formula_components.formula_id', select: 'productId name product_type batch_yield base_ingredients resolved_base_ingredients' })
+      .populate('skus.resolved_extra_ingredients.ingredient_id')
       .sort({ createdAt: -1 });
 
     const customOrders = await Order.find({ custom_group: { $nin: ['', null] } })
@@ -249,14 +323,15 @@ exports.getProducts = async (req, res, next) => {
       if (obj.skus) {
         obj.skus.forEach(sku => {
           let extra_cost = 0;
-          if (sku.extra_ingredients) {
-            sku.extra_ingredients.forEach(item => {
+          const skuIngredients = sku.resolved_extra_ingredients?.length ? sku.resolved_extra_ingredients : sku.extra_ingredients;
+          if (skuIngredients) {
+            skuIngredients.forEach(item => {
               if (!item.suspended && item.ingredient_id && item.ingredient_id.price) {
                 extra_cost += item.ingredient_id.price * item.quantity;
               }
             });
           }
-          sku.cost = base_cost + extra_cost;
+          sku.cost = (skuUsesBaseFormula(sku) ? base_cost : 0) + extra_cost;
         });
       }
 
@@ -389,7 +464,12 @@ exports.updateProduct = async (req, res, next) => {
 exports.deleteProduct = async (req, res, next) => {
   try {
     const product = await Product.findById(req.params.id);
-    if (product?.product_type === 'sub_formula' && await Product.exists({ 'formula_components.formula_id': product._id })) {
+    if (product?.product_type === 'sub_formula' && await Product.exists({
+      $or: [
+        { 'formula_components.formula_id': product._id },
+        { 'skus.formula_components.formula_id': product._id },
+      ],
+    })) {
       return res.status(400).json({ success: false, message: 'Công thức phụ đang được sản phẩm khác sử dụng nên chưa thể xoá.' });
     }
     if (!product) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });

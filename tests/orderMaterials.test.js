@@ -91,6 +91,37 @@ test('suspended formula ingredients are excluded from order material usage', () 
   assert.deepEqual(itemMaterials({ quantity: 1 }, product), [{ ingredient_id: ids.next, quantity: 3 }]);
 });
 
+test('orders and cost use resolved SKU ingredients from attached sub-formulas', () => {
+  const product = {
+    base_ingredients: [{ ingredient_id: { _id: ids.old, price: 10 }, quantity: 2 }],
+    skus: [{
+      id: 'SKU',
+      extra_ingredients: [{ ingredient_id: { _id: ids.extra, price: 100 }, quantity: 1 }],
+      resolved_extra_ingredients: [
+        { ingredient_id: { _id: ids.extra, price: 100 }, quantity: 1 },
+        { ingredient_id: { _id: ids.next, price: 30 }, quantity: 3 },
+      ],
+    }],
+  };
+
+  assert.deepEqual(itemMaterials({ sku_id: 'SKU' }, product), [
+    product.base_ingredients[0],
+    ...product.skus[0].resolved_extra_ingredients,
+  ]);
+  assert.equal(calculateProductUnitCost(product, 'SKU'), 210);
+});
+
+test('add-on SKU excludes the product base formula from materials and cost', () => {
+  const addOn = { ingredient_id: { _id: ids.extra, price: 100 }, quantity: 1 };
+  const product = {
+    base_ingredients: [{ ingredient_id: { _id: ids.old, price: 1000 }, quantity: 2 }],
+    skus: [{ id: 'ADD-ON', use_base_formula: false, resolved_extra_ingredients: [addOn] }],
+  };
+
+  assert.deepEqual(itemMaterials({ sku_id: 'ADD-ON' }, product), [addOn]);
+  assert.equal(calculateProductUnitCost(product, 'ADD-ON'), 100);
+});
+
 test('swap refunds old materials, deducts new quantities, leaves other ingredients and formula unchanged', async () => {
   const { req, materials, product, order, state } = setup();
   const originalRecipe = structuredClone(product);

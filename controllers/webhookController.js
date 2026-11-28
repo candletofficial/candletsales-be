@@ -1,5 +1,6 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const { skuIngredients, skuUsesBaseFormula } = require('../utils/productIngredients');
 const Material = require('../models/Material');
 const FundTransaction = require('../models/FundTransaction');
 const { buildMaterialDeductions, markOrderReturning, processReturnOrder } = require('./orderController');
@@ -252,7 +253,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       // If unit_cost is 0 for any item, we should try to recalculate it
       const hasZeroCost = existingOrder.items.some(i => !i.unit_cost || i.unit_cost === 0);
       if (hasZeroCost) {
-        const allProducts = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+        const allProducts = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id').populate('skus.resolved_extra_ingredients.ingredient_id');
         for (let item of existingOrder.items) {
           if (!item.unit_cost || item.unit_cost === 0) {
             let matchedProduct = allProducts.find(p => p._id.toString() === item.product_id?.toString());
@@ -266,12 +267,14 @@ exports.handlePancakeWebhook = async (req, res, next) => {
                   }
                 });
               }
-              let unit_cost = base_cost;
+              const matchedSku = item.sku_id && matchedProduct.skus
+                ? matchedProduct.skus.find(s => s.id === item.sku_id)
+                : null;
+              let unit_cost = skuUsesBaseFormula(matchedSku) ? base_cost : 0;
               if (item.sku_id && matchedProduct.skus) {
-                const matchedSku = matchedProduct.skus.find(s => s.id === item.sku_id);
-                if (matchedSku && matchedSku.extra_ingredients) {
+                if (matchedSku) {
                   let extra_cost = 0;
-                  matchedSku.extra_ingredients.forEach(ei => {
+                  skuIngredients(matchedSku).forEach(ei => {
                     if (ei.suspended !== true && ei.ingredient_id && ei.ingredient_id.price) {
                       extra_cost += ei.ingredient_id.price * ei.quantity;
                     }
@@ -304,7 +307,7 @@ exports.handlePancakeWebhook = async (req, res, next) => {
       return res.status(200).json({ success: true, message: 'Ignored: Full order payload required for creation' });
     }
 
-    const allProducts = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id');
+    const allProducts = await Product.find({ product_type: { $nin: ['sub_formula', 'custom'] } }).populate('base_ingredients.ingredient_id').populate('skus.extra_ingredients.ingredient_id').populate('skus.resolved_extra_ingredients.ingredient_id');
     const orderItems = [];
 
     // Map Pancake items to our Products
@@ -432,13 +435,15 @@ exports.handlePancakeWebhook = async (req, res, next) => {
           });
         }
         
-        unit_cost = base_cost;
+        const matchedSku = matchedSkuId && matchedProduct.skus
+          ? matchedProduct.skus.find(s => s.id === matchedSkuId)
+          : null;
+        unit_cost = skuUsesBaseFormula(matchedSku) ? base_cost : 0;
         
         if (matchedSkuId && matchedProduct.skus) {
-          const matchedSku = matchedProduct.skus.find(s => s.id === matchedSkuId);
-          if (matchedSku && matchedSku.extra_ingredients) {
+          if (matchedSku) {
             let extra_cost = 0;
-            matchedSku.extra_ingredients.forEach(item => {
+            skuIngredients(matchedSku).forEach(item => {
               if (item.suspended !== true && item.ingredient_id && item.ingredient_id.price) {
                 extra_cost += item.ingredient_id.price * item.quantity;
               }

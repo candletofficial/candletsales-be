@@ -34,6 +34,37 @@ test('product and SKU stock include base and extra ingredients', () => {
   assert.equal(product.stock, 4);
 });
 
+test('SKU stock uses resolved ingredients from its attached sub-formulas', () => {
+  const product = enrichProductAvailability({
+    base_ingredients: [{ ingredient_id: material('wax', 100), quantity: 20 }],
+    skus: [{
+      id: 'with-sub-formula',
+      extra_ingredients: [{ ingredient_id: material('direct-oil', 100), quantity: 1 }],
+      resolved_extra_ingredients: [
+        { ingredient_id: material('direct-oil', 100), quantity: 1 },
+        { ingredient_id: material('sub-formula-oil', 12), quantity: 5 },
+      ],
+    }],
+  });
+
+  assert.equal(product.skus[0].stock, 2);
+  assert.equal(product.stock, 2);
+});
+
+test('add-on SKU ignores the product base formula', () => {
+  const product = enrichProductAvailability({
+    base_ingredients: [{ ingredient_id: material('wax', 0), quantity: 20 }],
+    skus: [{
+      id: 'gift-bag-only',
+      use_base_formula: false,
+      resolved_extra_ingredients: [{ ingredient_id: material('gift-bag', 12), quantity: 1 }],
+    }],
+  });
+
+  assert.equal(product.skus[0].stock, 12);
+  assert.equal(product.stock, 12);
+});
+
 test('missing recipes remain unknown and missing materials make stock zero', () => {
   assert.equal(recipeCapacity([]), null);
   assert.equal(recipeCapacity([{ ingredient_id: null, quantity: 1 }]), 0);

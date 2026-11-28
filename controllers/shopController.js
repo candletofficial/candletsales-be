@@ -13,6 +13,7 @@ exports.getShopProducts = async (req, res, next) => {
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id')
+      .populate('skus.resolved_extra_ingredients.ingredient_id')
       .sort({ createdAt: -1 });
 
     const reviewStats = await Review.aggregate([
@@ -34,7 +35,11 @@ exports.getShopProducts = async (req, res, next) => {
       const obj = enrichProductAvailability(p);
       delete obj.base_ingredients;
       delete obj.resolved_base_ingredients;
-      for (const sku of obj.skus || []) delete sku.extra_ingredients;
+      for (const sku of obj.skus || []) {
+        delete sku.extra_ingredients;
+        delete sku.resolved_extra_ingredients;
+        delete sku.formula_components;
+      }
       const stats = statsMap[obj._id.toString()];
       obj.avgRating = stats && stats.avgRating ? stats.avgRating.toFixed(1) : "5.0";
       obj.reviewCount = stats ? stats.reviewCount : 0;
@@ -70,7 +75,8 @@ exports.getShopProductById = async (req, res, next) => {
     })
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
-      .populate('skus.extra_ingredients.ingredient_id');
+      .populate('skus.extra_ingredients.ingredient_id')
+      .populate('skus.resolved_extra_ingredients.ingredient_id');
     if (!product) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
     }
@@ -97,7 +103,11 @@ exports.getShopProductById = async (req, res, next) => {
     }));
     delete obj.resolved_base_ingredients;
     delete obj.formula_components;
-    for (const sku of obj.skus || []) delete sku.extra_ingredients;
+    for (const sku of obj.skus || []) {
+      delete sku.extra_ingredients;
+      delete sku.resolved_extra_ingredients;
+      delete sku.formula_components;
+    }
     if (reviewStats.length > 0) {
       obj.avgRating = reviewStats[0].avgRating.toFixed(1);
       obj.reviewCount = reviewStats[0].reviewCount;

@@ -43,9 +43,11 @@ const materialUsageFilter = materialId => ({
     { 'base_ingredients.ingredient_id': materialId },
     { 'resolved_base_ingredients.ingredient_id': materialId },
     { 'skus.extra_ingredients.ingredient_id': materialId },
+    { 'skus.resolved_extra_ingredients.ingredient_id': materialId },
     { 'base_ingredients.replacement_for': materialId },
     { 'resolved_base_ingredients.replacement_for': materialId },
     { 'skus.extra_ingredients.replacement_for': materialId },
+    { 'skus.resolved_extra_ingredients.replacement_for': materialId },
   ],
 });
 
@@ -86,6 +88,7 @@ const updateProductMaterialReferences = async (materialId, action, replacementId
     product.set('skus', (value.skus || []).map(sku => ({
       ...sku,
       extra_ingredients: change(sku.extra_ingredients),
+      resolved_extra_ingredients: change(sku.resolved_extra_ingredients),
     })));
     await product.save();
   }

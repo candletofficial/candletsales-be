@@ -9,6 +9,7 @@ const ExpenseTicket = require('../models/ExpenseTicket');
 const FundTransaction = require('../models/FundTransaction');
 const SystemConfig = require('../models/SystemConfig');
 const { enrichProductAvailability } = require('../utils/productAvailability');
+const { skuIngredients, skuUsesBaseFormula } = require('../utils/productIngredients');
 const { getFundAccountIds, buildOrderRevenueMap } = require('../utils/carrierCodAccounts');
 const { buildBusinessContext, SUGGESTED_QUESTIONS, buildSmartAlertsPrompt } = require('../utils/aiHelper');
 const { createCurrentUnitCostResolver } = require('../utils/currentOrderCost');
@@ -266,6 +267,7 @@ const fetchDashboardData = async (options = {}) => {
       .populate('base_ingredients.ingredient_id')
       .populate('resolved_base_ingredients.ingredient_id')
       .populate('skus.extra_ingredients.ingredient_id')
+      .populate('skus.resolved_extra_ingredients.ingredient_id')
       .lean(),
     AffiliateFee.find({}).lean(),
     FundTransaction.aggregate([{ $group: { _id: null, totalBalance: { $sum: '$fund_change' } } }]),
@@ -639,12 +641,12 @@ const fetchDashboardData = async (options = {}) => {
     if (obj.skus) {
       obj.skus = obj.skus.map((sku) => {
         let extra_cost = 0;
-        (sku.extra_ingredients || []).forEach((item) => {
+        skuIngredients(sku).forEach((item) => {
           if (item.suspended !== true && item.ingredient_id?.price) {
             extra_cost += item.ingredient_id.price * item.quantity;
           }
         });
-        return { ...sku, cost: base_cost + extra_cost };
+        return { ...sku, cost: (skuUsesBaseFormula(sku) ? base_cost : 0) + extra_cost };
       });
     }
     return enrichProductAvailability(obj);
